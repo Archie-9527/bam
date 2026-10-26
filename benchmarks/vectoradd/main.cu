@@ -319,8 +319,8 @@ int main(int argc, char *argv[]) {
                 cuda_err_chk(cudaMemcpy(b_d, b_h, n_elems_size, cudaMemcpyHostToDevice));
                 //TODO: we can move that read op here.
                 //file.read((char*)edgeList_d, edge_size);
-                cuda_err_chk(cudaMemAdvise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
-                cuda_err_chk(cudaMemAdvise(b_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(b_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
                 cuda_err_chk(cudaMemGetInfo(&freebyte, &totalbyte));
                 break;
                 }
@@ -347,8 +347,8 @@ int main(int argc, char *argv[]) {
 
                 cuda_err_chk(cudaMallocManaged((void**)&a_d, size_4k_aligned));
                 cuda_err_chk(cudaMallocManaged((void**)&b_d, size_4k_aligned));
-                cuda_err_chk(cudaMemAdvise(a_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
-                cuda_err_chk(cudaMemAdvise(b_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(a_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(b_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                
                 if (fread(a_d, sizeof(uint64_t), count_4k_aligned, fa_tmp) <0) {
@@ -379,10 +379,10 @@ int main(int argc, char *argv[]) {
                 cuda_err_chk(cudaMallocManaged((void**)&b_d, n_elems_size));
                 filea.read((char*)a_d, n_elems_size);
                 fileb.read((char*)b_d, n_elems_size);
-                cuda_err_chk(cudaMemAdvise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
-                cuda_err_chk(cudaMemAdvise(b_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
-                //cuda_err_chk(cudaMemAdvise(a_d, n_elems_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
-                //cuda_err_chk(cudaMemAdvise(b_d, n_elems_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(b_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                //cuda_err_chk(nvm_cuda_mem_advise(a_d, n_elems_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                //cuda_err_chk(nvm_cuda_mem_advise(b_d, n_elems_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 high_resolution_clock::time_point ft2 = high_resolution_clock::now();
                 duration<double> time_span = duration_cast<duration<double>>(ft2 -ft1);
                 std::cout<< "file read time: "<< time_span.count() <<std::endl;

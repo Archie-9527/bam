@@ -81,7 +81,8 @@ struct ctrl* ctrl_find_by_inode(const struct list* list, const struct inode* ino
     {
         ctrl = container_of(element, struct ctrl, list);
 
-        if (&ctrl->cdev == inode->i_cdev)
+        /* miscdevice 共用分派入口，通过实际设备号区分控制器，不能再比较 inode->i_cdev。 */
+        if (ctrl->rdev != 0 && ctrl->rdev == inode->i_rdev)
         {
             return ctrl;
         }
@@ -97,37 +98,25 @@ struct ctrl* ctrl_find_by_inode(const struct list* list, const struct inode* ino
 int ctrl_chrdev_create(struct ctrl* ctrl, dev_t first, const struct file_operations* fops)
 {
     int err;
-    struct device* chrdev = NULL;
-
+    (void)first;
     if (ctrl->chrdev != NULL)
-    {
-        printk(KERN_WARNING "Character device is already created\n");
         return 0;
-    }
 
-    ctrl->rdev = MKDEV(MAJOR(first), MINOR(first) + ctrl->number);
-
-    cdev_init(&ctrl->cdev, fops);
-    err = cdev_add(&ctrl->cdev, ctrl->rdev, 1);
-    if (err != 0)
-    {
-        printk(KERN_ERR "Failed to add cdev\n");
+    /* 使用非 GPL-only 的 miscdevice 接口，兼容 NVIDIA 专有驱动依赖。 */
+    memset(&ctrl->miscdev, 0, sizeof(ctrl->miscdev));
+    ctrl->miscdev.minor = MISC_DYNAMIC_MINOR;
+    ctrl->miscdev.name = ctrl->name;
+    ctrl->miscdev.fops = fops;
+    ctrl->miscdev.parent = &ctrl->pdev->dev;
+    ctrl->miscdev.mode = 0600;
+    err = misc_register(&ctrl->miscdev);
+    if (err)
         return err;
-    }
 
-    chrdev = device_create(ctrl->cls, NULL, ctrl->rdev, NULL, ctrl->name);
-    if (IS_ERR(chrdev))
-    {
-        cdev_del(&ctrl->cdev);
-        printk(KERN_ERR "Failed to create character device\n");
-        return PTR_ERR(chrdev);
-    }
-
-    ctrl->chrdev = chrdev;
-
-    printk(KERN_INFO "Character device /dev/%s created (%d.%d)\n",
-            ctrl->name, MAJOR(ctrl->rdev), MINOR(ctrl->rdev));
-
+    ctrl->chrdev = ctrl->miscdev.this_device;
+    ctrl->rdev = ctrl->chrdev->devt;
+    printk(KERN_INFO "BaM miscdevice /dev/%s ready (%d:%d)\n",
+           ctrl->name, MAJOR(ctrl->rdev), MINOR(ctrl->rdev));
     return 0;
 }
 
@@ -135,14 +124,10 @@ int ctrl_chrdev_create(struct ctrl* ctrl, dev_t first, const struct file_operati
 
 void ctrl_chrdev_remove(struct ctrl* ctrl)
 {
-    if (ctrl->chrdev != NULL)
-    {
-        device_destroy(ctrl->cls, ctrl->rdev);
-        cdev_del(&ctrl->cdev);
+    if (ctrl->chrdev != NULL) {
+        misc_deregister(&ctrl->miscdev);
         ctrl->chrdev = NULL;
-
-        printk(KERN_DEBUG "Character device /dev/%s removed (%d.%d)\n",
-                ctrl->name, MAJOR(ctrl->rdev), MINOR(ctrl->rdev));
+        ctrl->rdev = 0;
     }
 }
 

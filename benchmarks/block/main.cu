@@ -32,6 +32,10 @@
 #ifdef __DIS_CLUSTER__
 #include <sisci_api.h>
 #endif
+#include <nvml.h>
+#include <algorithm>
+#include <numeric>
+#include <curand_kernel.h>
 
 using error = std::runtime_error;
 using std::string;
@@ -45,6 +49,40 @@ const char* const intel_ctrls_paths[] = {"/dev/libnvm0", "/dev/libnvm1", "/dev/l
 
 
 #define SIZE (8*4096)
+
+#ifdef LATENCY_BREAKDOWN
+int get_sm_clock(int cudaDevice) {
+    nvmlReturn_t result;
+    nvmlDevice_t device;
+    unsigned int smClock = 0;
+
+    result = nvmlInit();
+    if (result != NVML_SUCCESS) {
+        std::cerr << "NVML init failed: " << nvmlErrorString(result)
+                  << std::endl;
+        return -1;
+    }
+
+    result = nvmlDeviceGetHandleByIndex(cudaDevice, &device);
+    if (result != NVML_SUCCESS) {
+        std::cerr << "Failed to get handle for GPU: " << nvmlErrorString(result)
+                  << std::endl;
+        nvmlShutdown();
+        return -1;
+    }
+
+    result = nvmlDeviceGetClockInfo(device, NVML_CLOCK_SM, &smClock);
+    if (result != NVML_SUCCESS) {
+        std::cerr << "Failed to get SM clock: " << nvmlErrorString(result)
+                  << std::endl;
+        nvmlShutdown();
+        return -1;
+    }
+
+    nvmlShutdown();
+    return static_cast<int>(smClock);
+}
+#endif
 
 __global__
 void print_cache_kernel(page_cache_d_t* pc) {
@@ -107,9 +145,9 @@ void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t 
     uint32_t ctrl;
     uint32_t queue;
     if (laneid == 0) {
-        ctrl = pc->ctrl_counter->fetch_add(1, simt::memory_order_relaxed) % (pc->n_ctrls);
-        //queue = ctrls[ctrl]->queue_counter.fetch_add(1, simt::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
-        queue = smid % (ctrls[ctrl]->n_qps);
+        ctrl = pc->ctrl_counter->fetch_add(1, cuda::std::memory_order_relaxed) % (pc->n_ctrls);
+        queue = ctrls[ctrl]->queue_counter.fetch_add(1, cuda::std::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
+        // queue = smid % (ctrls[ctrl]->n_qps);
     }
     ctrl =  __shfl_sync(0xFFFFFFFF, ctrl, 0);
     queue =  __shfl_sync(0xFFFFFFFF, queue, 0);
@@ -117,10 +155,10 @@ void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t 
 
 
     if (tid < n_reqs) {
-        uint64_t start_block = (tid*req_size) >> ctrls[ctrl]->d_qps[queue].block_size_log;
+        uint64_t start_block = tid*req_size;
         //uint64_t start_block = (tid*req_size) >> ctrls[ctrl]->d_qps[queue].block_size_log;
         //start_block = tid;
-        uint64_t n_blocks = req_size >> ctrls[ctrl]->d_qps[queue].block_size_log; /// ctrls[ctrl].ns.lba_data_size;;
+        uint64_t n_blocks = req_size; /// ctrls[ctrl].ns.lba_data_size;;
         //printf("tid: %llu\tstart_block: %llu\tn_blocks: %llu\n", (unsigned long long) tid, (unsigned long long) start_block, (unsigned long long) n_blocks);
         uint8_t opcode;
         for (size_t i = 0; i < reqs_per_thread; i++) {
@@ -147,8 +185,14 @@ void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t 
 
 }
 
+#ifdef LATENCY_BREAKDOWN
 __global__ //__launch_bounds__(64,32)
-void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t req_size, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t* assignment, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment) {
+void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t n_blocks, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t max_lba, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment, ulonglong4* d_clks) {
+#else
+__global__ //__launch_bounds__(64,32)
+void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t n_blocks, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t max_lba, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment) {
+#endif
+
     //printf("in threads\n");
     uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t laneid = lane_id();
@@ -159,19 +203,23 @@ void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t req_
     uint32_t queue;
     if (laneid == 0) {
 	//ctrl = smid % (pc->n_ctrls);
-        ctrl = pc->ctrl_counter->fetch_add(1, simt::memory_order_relaxed) % (pc->n_ctrls);
-        queue = ctrls[ctrl]->queue_counter.fetch_add(1, simt::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
+        ctrl = pc->ctrl_counter->fetch_add(1, cuda::std::memory_order_relaxed) % (pc->n_ctrls);
+        queue = ctrls[ctrl]->queue_counter.fetch_add(1, cuda::std::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
         //queue = smid % (ctrls[ctrl]->n_qps);
     }
     ctrl =  __shfl_sync(0xFFFFFFFF, ctrl, 0);
     queue =  __shfl_sync(0xFFFFFFFF, queue, 0);
 
+#ifdef LATENCY_BREAKDOWN
+    ulonglong4 clks;
+#endif
+    curandState state;
+    curand_init(1234, tid, 0, &state);
 
     if (tid < n_reqs) {
-        uint64_t start_block = (assignment[tid]*req_size) >> ctrls[ctrl]->d_qps[queue].block_size_log;
+        uint64_t start_block = (uint64_t)(curand_uniform_double(&state) * max_lba);
         //uint64_t start_block = (tid*req_size) >> ctrls[ctrl]->d_qps[queue].block_size_log;
         //start_block = tid;
-        uint64_t n_blocks = req_size >> ctrls[ctrl]->d_qps[queue].block_size_log; /// ctrls[ctrl].ns.lba_data_size;;
         //printf("tid: %llu\tstart_block: %llu\tn_blocks: %llu\n", (unsigned long long) tid, (unsigned long long) start_block, (unsigned long long) n_blocks);
 
         uint8_t opcode;
@@ -181,7 +229,12 @@ void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t req_
                 access_data(pc, (ctrls[ctrl]->d_qps)+(queue),start_block, n_blocks, tid, opcode);
             }
             else if (access_type == READ) {
+#ifdef LATENCY_BREAKDOWN
+                uint64_t idx = i * n_reqs + tid;
+                read_data(pc, (ctrls[ctrl]->d_qps)+(queue),start_block, n_blocks, tid, &d_clks[idx]);
+#else
                 read_data(pc, (ctrls[ctrl]->d_qps)+(queue),start_block, n_blocks, tid);
+#endif
 
             }
             else {
@@ -307,8 +360,9 @@ int main(int argc, char** argv) {
 
         //std::cout << "finished creating range\n";
 
-
-
+        /* 主机参数以字节给出，NVMe 命令需要转换为 LBA 个数。 */
+        uint32_t nlb = page_size >> ctrls[0]->blk_size_log;
+        uint64_t max_lba = ((n_blocks * page_size) >> ctrls[0]->blk_size_log) - 1;
 
         unsigned long long* d_req_count;
         cuda_err_chk(cudaMalloc(&d_req_count, sizeof(unsigned long long)));
@@ -317,18 +371,6 @@ int main(int argc, char** argv) {
         char st[15];
         cuda_err_chk(cudaDeviceGetPCIBusId(st, 15, settings.cudaDevice));
         std::cout << st << std::endl;
-        uint64_t* assignment;
-        uint64_t* d_assignment;
-        if (settings.random) {
-            assignment = (uint64_t*) malloc(n_threads*sizeof(uint64_t));
-            for (size_t i = 0; i< n_threads; i++)
-                assignment[i] = rand() % (n_blocks);
-
-
-            cuda_err_chk(cudaMalloc(&d_assignment, n_threads*sizeof(uint64_t)));
-            cuda_err_chk(cudaMemcpy(d_assignment, assignment,  n_threads*sizeof(uint64_t), cudaMemcpyHostToDevice));
-        }
-        Event before;
 
         uint8_t* access_assignment;
         uint8_t* d_access_assignment = NULL;
@@ -340,11 +382,26 @@ int main(int argc, char** argv) {
             cuda_err_chk(cudaMalloc(&d_access_assignment, n_threads*sizeof(uint8_t)));
             cuda_err_chk(cudaMemcpy(d_access_assignment, access_assignment, n_threads*sizeof(uint8_t), cudaMemcpyHostToDevice));
         }
+
+#ifdef LATENCY_BREAKDOWN
+        uint64_t n_total_reqs = n_threads * settings.numReqs;
+        ulonglong4* clks;
+        ulonglong4* d_clks;
+        if (settings.random) {
+            clks = (ulonglong4*)malloc(n_total_reqs * sizeof(ulonglong4));
+            cuda_err_chk(cudaMalloc(&d_clks, n_total_reqs * sizeof(ulonglong4)));
+        }
+#endif
+        Event before;
         std::cout << "atlaunch kernel\n";
         if (settings.random)
-            random_access_kernel<<<g_size, b_size>>>(h_pc.pdt.d_ctrls, d_pc, page_size, n_threads, d_req_count, settings.n_ctrls, d_assignment, settings.numReqs, settings.accessType, d_access_assignment);
+#ifdef LATENCY_BREAKDOWN
+            random_access_kernel<<<g_size, b_size>>>(h_pc.pdt.d_ctrls, d_pc, nlb, n_threads, d_req_count, settings.n_ctrls, max_lba, settings.numReqs, settings.accessType, d_access_assignment, d_clks);
+#else
+            random_access_kernel<<<g_size, b_size>>>(h_pc.pdt.d_ctrls, d_pc, nlb, n_threads, d_req_count, settings.n_ctrls, max_lba, settings.numReqs, settings.accessType, d_access_assignment);
+#endif
         else
-            sequential_access_kernel<<<g_size, b_size>>>(h_pc.pdt.d_ctrls, d_pc, page_size, n_threads, d_req_count, settings.n_ctrls, settings.numReqs, settings.accessType, d_access_assignment);
+            sequential_access_kernel<<<g_size, b_size>>>(h_pc.pdt.d_ctrls, d_pc, nlb, n_threads, d_req_count, settings.n_ctrls, settings.numReqs, settings.accessType, d_access_assignment);
         Event after;
 
         //print_cache_kernel<<<1,1>>>(d_pc);
@@ -386,6 +443,68 @@ int main(int argc, char** argv) {
 
         //std::cout << RAND_MAX << std::endl;
 
+#ifdef LATENCY_BREAKDOWN
+        if (settings.random) {
+            int smClock = get_sm_clock(settings.cudaDevice);
+
+            if (smClock >= 0) {
+                cuda_err_chk(cudaMemcpy(clks, d_clks,
+                                        n_total_reqs * sizeof(ulonglong4),
+                                        cudaMemcpyDeviceToHost));
+                cuda_err_chk(cudaDeviceSynchronize());
+
+                std::vector<double> slats(n_total_reqs);
+                std::vector<double> clats(n_total_reqs);
+                for (size_t i = 0; i < n_total_reqs; i++) {
+                    slats[i] = (double)(clks[i].y - clks[i].x)/1000.0;
+                    clats[i] = (double)(clks[i].z - clks[i].y)/1000.0;
+                }
+                std::sort(slats.begin(), slats.end());
+                std::sort(clats.begin(), clats.end());
+
+                auto percentile = [](const std::vector<double>& v,
+                                    double p) -> double {
+                    size_t idx = static_cast<size_t>(p * v.size() / 100.0);
+                    if (idx >= v.size())
+                        idx = v.size() - 1;
+                    return v[idx];
+                };
+
+                double avg_slat = std::accumulate(slats.begin(), slats.end(), 0.0) / slats.size();
+                double avg_clat = std::accumulate(clats.begin(), clats.end(), 0.0) / clats.size();
+
+                // std::cout << "SM clock (MHz): " << smClock << std::endl;
+                std::cout << "slat (usec): avg=" << avg_slat << std::endl;
+                std::cout << "p10,p20,p30,p40,p50,p60,p70,p80,p90,p95,p99,p99.5" << std::endl;
+                std::cout << percentile(slats, 10) << ","
+                          << percentile(slats, 20) << ","
+                          << percentile(slats, 30) << ","
+                          << percentile(slats, 40) << ","
+                          << percentile(slats, 50) << ","
+                          << percentile(slats, 60) << ","
+                          << percentile(slats, 70) << ","
+                          << percentile(slats, 80) << ","
+                          << percentile(slats, 90) << ","
+                          << percentile(slats, 95) << ","
+                          << percentile(slats, 99) << ","
+                          << percentile(slats, 99.9) << std::endl;
+                std::cout << "clat (usec): avg=" << avg_clat << std::endl;
+                std::cout << "p10,p20,p30,p40,p50,p60,p70,p80,p90,p95,p99,p99.5" << std::endl;
+                std::cout << percentile(clats, 10) << ","
+                          << percentile(clats, 20) << ","
+                          << percentile(clats, 30) << ","
+                          << percentile(clats, 40) << ","
+                          << percentile(clats, 50) << ","
+                          << percentile(clats, 60) << ","
+                          << percentile(clats, 70) << ","
+                          << percentile(clats, 80) << ","
+                          << percentile(clats, 90) << ","
+                          << percentile(clats, 95) << ","
+                          << percentile(clats, 99) << ","
+                          << percentile(clats, 99.9) << std::endl;
+            }
+        }
+#endif
     }
     catch (const error& e) {
         fprintf(stderr, "Unexpected error: %s\n", e.what());

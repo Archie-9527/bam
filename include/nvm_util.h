@@ -1,14 +1,19 @@
 #ifndef __NVM_UTIL_H__
 #define __NVM_UTIL_H__
-//#ifndef __CUDACC__
-//#define __device__
-//#define __host__
-//#endif
+#ifndef __CUDACC__
+#define __device__
+#define __host__
+#endif
+
+#ifndef __forceinline__
+#define __forceinline__ inline
+#endif
 
 #include <nvm_types.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 #ifdef __DIS_CLUSTER__
 #include <sisci_types.h>
@@ -23,6 +28,31 @@
 
 #define _NVM_MASK_PART(hi, lo) \
     (_NVM_MASK((hi) + 1) - _NVM_MASK(lo))
+
+/* CUDA 13 的 cudaMemAdvise 改用 cudaMemLocation；旧工具链保留原设备编号接口。 */
+static inline cudaError_t nvm_cuda_mem_advise(const void* ptr, size_t count, enum cudaMemoryAdvise advice, int device)
+{
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+    struct cudaMemLocation location;
+    location.type = cudaMemLocationTypeDevice;
+    location.id = device;
+    return cudaMemAdvise(ptr, count, advice, location);
+#else
+    return cudaMemAdvise(ptr, count, advice, device);
+#endif
+}
+
+static inline cudaError_t nvm_cuda_mem_prefetch_async(const void* ptr, size_t count, int device, cudaStream_t stream)
+{
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
+    struct cudaMemLocation location;
+    location.type = cudaMemLocationTypeDevice;
+    location.id = device;
+    return cudaMemPrefetchAsync(ptr, count, location, 0, stream);
+#else
+    return cudaMemPrefetchAsync(ptr, count, device, stream);
+#endif
+}
 
 
 #if defined( __NO_COHERENCE__ ) && defined( __DIS_CLUSTER__ )

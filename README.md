@@ -1,3 +1,5 @@
+> 此子模块包含 SwarmIO 的新内核/CUDA CCCL 和 NVIDIA 专有驱动兼容。统一编译运行入口见父仓库 [中文 README](../README.md)。无需再次打补丁。
+
 # GPU-Initiated On-Demand High-Throughput Storage Access in the BaM System Architecture
 
 **This is the opencourse implementation of BaM system (ASPLOS'23). Contributions to the codebase are most welcome**

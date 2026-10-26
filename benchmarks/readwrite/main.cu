@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
                size_t orig_sz = sb_orig.st_size - settings.ifileoffset; 
 
                cuda_err_chk(cudaMallocManaged((void**)&orig_h, orig_sz)); 
-               cuda_err_chk(cudaMemAdvise(orig_h, orig_sz, cudaMemAdviseSetAccessedBy, 0));
+               cuda_err_chk(nvm_cuda_mem_advise(orig_h, orig_sz, cudaMemAdviseSetAccessedBy, 0));
 //               cuda_err_chk(cudaMemset(orig_h, 0, orig_sz)); 
                memcpy(orig_h, map_orig+settings.ifileoffset, orig_sz);
 
@@ -448,7 +448,7 @@ int main(int argc, char** argv) {
                    return 1;
                }
                cuda_err_chk(cudaMallocManaged((void**)&nvme_h, nvme_sz)); 
-               cuda_err_chk(cudaMemAdvise(nvme_h, nvme_sz, cudaMemAdviseSetAccessedBy, 0));
+               cuda_err_chk(nvm_cuda_mem_advise(nvme_h, nvme_sz, cudaMemAdviseSetAccessedBy, 0));
   //             cuda_err_chk(cudaMemset(nvme_h, 0, nvme_sz)); 
                memcpy(nvme_h, map_nvme+settings.ifileoffset, nvme_sz);
                printf("Launching verification kernel");

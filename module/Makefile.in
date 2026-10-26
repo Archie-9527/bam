@@ -1,8 +1,9 @@
 
 ifneq ($(KERNELRELEASE),)
-	src := @module_root@
-	obj-m := @CMAKE_PROJECT_NAME@.o
-	@CMAKE_PROJECT_NAME@-objs := pci.o list.o ctrl.o map.o
+	src := @module_output@
+	# 仅编译 CMake 同步到本构建目录的源码，不读取旧目录下的对象文件。
+	obj-m := @module_name@.o
+	@module_name@-objs := pci.o list.o ctrl.o map.o
 	ccflags-y += @module_ccflags@
 	KBUILD_EXTRA_SYMBOLS := @module_symbols@
 else
@@ -18,14 +19,14 @@ clean:
 reload: unload load
 
 unload:
-	-rmmod @CMAKE_PROJECT_NAME@.ko
+	-rmmod @module_name@.ko
 
 load:
-	insmod @CMAKE_PROJECT_NAME@.ko max_num_ctrls=64
+	insmod @module_name@.ko max_num_ctrls=64
 
 install: default
 	$(MAKE) -C @KERNEL@ M=@module_output@ modules_install
-	#$(MAKE) INSTALL_MOD_DIR=@CMAKE_PROJECT_NAME@ -C @KERNEL@ M=@module_output@ modules_install
+	#$(MAKE) INSTALL_MOD_DIR=@module_name@ -C @KERNEL@ M=@module_output@ modules_install
 
 endif
 

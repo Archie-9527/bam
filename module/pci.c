@@ -12,6 +12,7 @@
 #include <linux/err.h>
 #include <linux/device.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 #include <asm/io.h>
 #include <asm/errno.h>
 #include <asm/page.h>
@@ -35,11 +36,11 @@ static const struct pci_device_id id_table[] =
 };
 
 
-/* Reference to the first character device */
+/* 保留内部函数参数以减少接口变动；实际设备号由 miscdevice 分配。 */
 static dev_t dev_first;
 
 
-/* Device class */
+/* miscdevice 不需要独立设备类，传入的 class 指针保持为空。 */
 static struct class* dev_class;
 
 
@@ -319,29 +320,11 @@ static int __init libnvm_helper_entry(void)
     list_init(&host_list);
     list_init(&device_list);
 
-    // Set up character device creation
-    err = alloc_chrdev_region(&dev_first, 0, max_num_ctrls, DRIVER_NAME);
-    if (err < 0)
-    {
-        printk(KERN_CRIT "Failed to allocate character device region\n");
-        return err;
-    }
-
-    // Create character device class
-    dev_class = class_create(THIS_MODULE, DRIVER_NAME);
-    if (IS_ERR(dev_class))
-    {
-        unregister_chrdev_region(dev_first, max_num_ctrls);
-        printk(KERN_CRIT "Failed to create character device class\n");
-        return PTR_ERR(dev_class);
-    }
-
+    /* misc_register 为每个控制器分配动态设备号，不调用 GPL-only 的 class/device_create。 */
     // Register as PCI driver
     err = pci_register_driver(&driver);
     if (err != 0)
     {
-        class_destroy(dev_class);
-        unregister_chrdev_region(dev_first, max_num_ctrls);
         printk(KERN_ERR "Failed to register as PCI driver\n");
         return err;
     }
@@ -370,8 +353,6 @@ static void __exit libnvm_helper_exit(void)
     printk(KERN_DEBUG DRIVER_NAME " Before pci_unregister_driver\n");
     pci_unregister_driver(&driver);
     printk(KERN_DEBUG DRIVER_NAME " After pci_unregister_driver\n");
-    class_destroy(dev_class);
-    unregister_chrdev_region(dev_first, max_num_ctrls);
 
     printk(KERN_DEBUG DRIVER_NAME " unloaded\n");
 }

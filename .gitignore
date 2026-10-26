@@ -37,3 +37,18 @@ build/*
 cscope.out
 cscope.in.out
 cscope.po.out
+
+# Ignore install directory
+Release/
+RelWithDebInfo/
+Debug/
+
+# Ignore etc
+.vscode/
+
+# 本地构建、实验输出和 Python 缓存；不进入源码提交。
+/build/
+/build-*/
+/results/
+__pycache__/
+*.py[cod]

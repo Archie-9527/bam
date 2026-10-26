@@ -1160,7 +1160,7 @@ int main(int argc, char *argv[]) {
             case UVM_READONLY:
                 cuda_err_chk(cudaMallocManaged((void**)&edgeList_d, edge_size));
                 file.read((char*)edgeList_d, edge_size);
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
 
                 cuda_err_chk(cudaMemGetInfo(&freebyte, &totalbyte));
                 if (totalbyte < 16*1024*1024*1024ULL)
@@ -1176,7 +1176,7 @@ int main(int argc, char *argv[]) {
                 high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                 cuda_err_chk(cudaMallocManaged((void**)&edgeList_d, edge_size));
                 file.read((char*)edgeList_d, edge_size);
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 high_resolution_clock::time_point ft2 = high_resolution_clock::now();
                 duration<double> time_span = duration_cast<duration<double>>(ft2 -ft1);
                 std::cout<< "edge file read time: "<< time_span.count() <<std::endl;
@@ -1195,7 +1195,7 @@ int main(int argc, char *argv[]) {
                 uint64_t edge_count_4k_aligned = ((edge_count + 2 + 4096 / sizeof(uint64_t)) / (4096 / sizeof(uint64_t))) * (4096 / sizeof(uint64_t));
                 uint64_t edge_size_4k_aligned = edge_count_4k_aligned * sizeof(uint64_t);
                 cuda_err_chk(cudaMallocManaged((void**)&edgeList_d, edge_size_4k_aligned));
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy,settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy,settings.cudaDevice));
                 high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                       
                 if (fread(edgeList_d, sizeof(uint64_t), edge_count_4k_aligned, file_temp) != edge_count + 2) {

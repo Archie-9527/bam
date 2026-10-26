@@ -457,8 +457,8 @@ int main(int argc, char *argv[]) {
                 for (uint64_t i = 0; i < weight_count; i++)
                     weightList_d[i] += offset;
 
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
-                cuda_err_chk(cudaMemAdvise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
 
                 cuda_err_chk(cudaMemGetInfo(&freebyte, &totalbyte));
                 if (totalbyte < 16*1024*1024*1024ULL)
@@ -484,8 +484,8 @@ int main(int argc, char *argv[]) {
                 for (uint64_t i = 0; i < weight_count; i++)
                     weightList_d[i] += offset;
 
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
-                cuda_err_chk(cudaMemAdvise(weightList_d, weight_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(weightList_d, weight_size, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 break;
   */          
 
@@ -502,7 +502,7 @@ int main(int argc, char *argv[]) {
                 uint64_t edge_count_4k_aligned = ((edge_count + 2 + 4096 / sizeof(uint64_t)) / (4096 / sizeof(uint64_t))) * (4096 / sizeof(uint64_t));
                 uint64_t edge_size_4k_aligned = edge_count_4k_aligned * sizeof(uint64_t);
                 cuda_err_chk(cudaMallocManaged((void**)&edgeList_d, edge_size_4k_aligned));
-                cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                       
                 if (fread(edgeList_d, sizeof(uint64_t), edge_count_4k_aligned, file_temp) != edge_count + 2) {
@@ -546,7 +546,7 @@ int main(int argc, char *argv[]) {
                  
                 for (uint64_t i = 0; i < weight_count; i++)
                     weightList_d[i] += offset;
-                cuda_err_chk(cudaMemAdvise(edgeList_d, weight_size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, weight_size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                  
                 file2.open(weight_file.c_str(), std::ios::in | std::ios::binary);
                 if (!file2.is_open()) {
@@ -757,8 +757,8 @@ int main(int argc, char *argv[]) {
                         cuda_err_chk(cudaFree(weightList_d));
                         edgeList_d = edgeList_temp;
                         weightList_d = weightList_temp;
-                        cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
-                        cuda_err_chk(cudaMemAdvise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, 0));
+                        cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
+                        cuda_err_chk(nvm_cuda_mem_advise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, 0));
                         break;
                     case UVM_READONLY_NVLINK:
                         cuda_err_chk(cudaSetDevice(2));
@@ -770,10 +770,10 @@ int main(int argc, char *argv[]) {
                         cuda_err_chk(cudaFree(weightList_d));
                         edgeList_d = edgeList_temp;
                         weightList_d = weightList_temp;
-                        cuda_err_chk(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
-                        cuda_err_chk(cudaMemAdvise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, 0));
-                        cuda_err_chk(cudaMemPrefetchAsync(edgeList_d, edge_size, 2, 0));
-                        cuda_err_chk(cudaMemPrefetchAsync(weightList_d, weight_size, 2, 0));
+                        cuda_err_chk(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
+                        cuda_err_chk(nvm_cuda_mem_advise(weightList_d, weight_size, cudaMemAdviseSetReadMostly, 0));
+                        cuda_err_chk(nvm_cuda_mem_prefetch_async(edgeList_d, edge_size, 2, 0));
+                        cuda_err_chk(nvm_cuda_mem_prefetch_async(weightList_d, weight_size, 2, 0));
                         cuda_err_chk(cudaDeviceSynchronize());
                         cuda_err_chk(cudaSetDevice(0));
                         break;

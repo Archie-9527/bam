@@ -6,7 +6,8 @@
 #include <time.h>
 #include "regs.h"
 #include "lib_util.h"
-#include <simt/atomic>
+#include <cuda/atomic>
+#include <cuda/std/atomic>
 
 
 int nvm_queue_clear(nvm_queue_t* queue, const nvm_ctrl_t* ctrl, bool cq, uint16_t no, uint32_t qs, 

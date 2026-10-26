@@ -7,7 +7,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <simt/atomic>
+/* 使用 CUDA CCCL 原子类型，替代旧 freestanding/simt 接口。 */
+#include <cuda/atomic>
+#include <cuda/std/atomic>
 
 #ifndef __align__ 
 #define __align__(x)
@@ -79,34 +81,34 @@ typedef struct
 
 
 
-typedef simt::atomic<uint32_t, simt::thread_scope_device> padded_struct_pc;
+typedef cuda::atomic<uint32_t, cuda::thread_scope_device> padded_struct_pc;
 
 #define CACHELINE_SIZE (128)
 
 #define STATES_PER_CACHELINE (CACHELINE_SIZE/sizeof(padded_struct_pc))
 /* typedef struct __align__(32) */
 /* { */
-/*     simt::atomic<uint32_t, simt::thread_scope_device>  val; */
+/*     cuda::atomic<uint32_t, cuda::thread_scope_device>  val; */
 /* //    uint8_t pad[32-4]; */
 /* } __attribute__((aligned (32))) padded_struct_pc; */
 
 
 typedef struct __align__(32)
 {
-    simt::atomic<uint32_t, simt::thread_scope_device>  val;
+    cuda::atomic<uint32_t, cuda::thread_scope_device>  val;
     //uint8_t pad[32-8];
 } __attribute__((aligned (32))) padded_struct;
 
 /* typedef struct __align__(32) */
 /* { */
-/*     simt::atomic<uint32_t, simt::thread_scope_system>  val; */
+/*     cuda::atomic<uint32_t, cuda::thread_scope_system>  val; */
 /*     //uint8_t pad[32-8]; */
 /* } __attribute__((aligned (32))) padded_struct_pc; */
 
 
 /* typedef struct __align__(32) */
 /* { */
-/*     simt::atomic<uint64_t, simt::thread_scope_system>  val; */
+/*     cuda::atomic<uint64_t, cuda::thread_scope_system>  val; */
 /*     uint8_t pad[32-8]; */
 /* } __attribute__((aligned (32))) padded_struct; */
 
@@ -122,24 +124,24 @@ typedef struct __align__(32)
  */
 typedef struct
 {
-    simt::atomic<uint32_t, simt::thread_scope_device> head_lock;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> head_lock;
     uint8_t pad0[28];
-    simt::atomic<uint32_t, simt::thread_scope_device> tail_lock;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> tail_lock;
     uint8_t pad1[28];
-    simt::atomic<uint32_t, simt::thread_scope_device> head;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> head;
     uint8_t pad2[28];
-    simt::atomic<uint32_t, simt::thread_scope_device> tail;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> tail;
     uint8_t pad3[28];
-    simt::atomic<uint32_t, simt::thread_scope_system> tail_copy;
+    cuda::atomic<uint32_t, cuda::thread_scope_system> tail_copy;
     uint8_t pad4[28];
-    simt::atomic<uint32_t, simt::thread_scope_system> head_copy;
+    cuda::atomic<uint32_t, cuda::thread_scope_system> head_copy;
     uint8_t pad5[28];
 
-    /* padded_struct<simt::atomic<uint32_t, simt::thread_scope_system>> head; */
-    /* padded_struct<simt::atomic<uint32_t, simt::thread_scope_system>> tail; */
-    simt::atomic<uint32_t, simt::thread_scope_device> in_ticket;
+    /* padded_struct<cuda::atomic<uint32_t, cuda::thread_scope_system>> head; */
+    /* padded_struct<cuda::atomic<uint32_t, cuda::thread_scope_system>> tail; */
+    cuda::atomic<uint32_t, cuda::thread_scope_device> in_ticket;
     uint8_t pad6[28];
-    simt::atomic<uint32_t, simt::thread_scope_device> cid_ticket;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> cid_ticket;
     //uint8_t pad7[28];
     padded_struct* tickets;
 
