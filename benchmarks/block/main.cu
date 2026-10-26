@@ -362,7 +362,8 @@ int main(int argc, char** argv) {
 
         /* 主机参数以字节给出，NVMe 命令需要转换为 LBA 个数。 */
         uint32_t nlb = page_size >> ctrls[0]->blk_size_log;
-        uint64_t max_lba = ((n_blocks * page_size) >> ctrls[0]->blk_size_log) - 1;
+        /* 起始 LBA 必须为整条多 LBA 请求留下空间，4 KiB 读取占 8 个 512 B LBA。 */
+        uint64_t max_lba = ((n_blocks * page_size) >> ctrls[0]->blk_size_log) - nlb;
 
         unsigned long long* d_req_count;
         cuda_err_chk(cudaMalloc(&d_req_count, sizeof(unsigned long long)));
