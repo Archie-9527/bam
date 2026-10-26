@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.24)
+cmake_minimum_required (VERSION 3.22)
 project (libnvm-benchmarks)
 
 set (THREADS_PREFER_PTHREAD_FLAG ON)

@@ -1,6 +1,7 @@
-cmake_minimum_required (VERSION 3.24)
-if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES native)
+cmake_minimum_required (VERSION 3.22)
+# 统一入口传入实际 GPU 架构，避免使用 CMake 3.24 才引入的 native。
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "" OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "native")
+    message(FATAL_ERROR "Set an explicit -DCMAKE_CUDA_ARCHITECTURES (for example 70), or use scripts/swarmio_bam.py in the parent repository")
 endif ()
 project (libnvm LANGUAGES CUDA C CXX)
 
