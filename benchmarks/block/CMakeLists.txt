@@ -8,6 +8,11 @@ find_package (CUDA 8.0 REQUIRED)
 
 
 
-make_benchmark (block-benchmark-module block-bench "main.cu;")
+if (SWARMIO_BENCH_SOURCE)
+    make_benchmark(block-benchmark-module block-bench "${SWARMIO_BENCH_SOURCE}")
+    target_link_libraries(block-benchmark-module ${CUDA_CUDA_LIBRARY})
+else ()
+    make_benchmark (block-benchmark-module block-bench "main.cu;")
+endif ()
 
 make_benchmark_choice (block-benchmark block-benchmark-smartio block-benchmark-module)

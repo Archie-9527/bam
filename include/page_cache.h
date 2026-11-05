@@ -882,9 +882,9 @@ struct page_cache_t {
     }
 
     ~page_cache_t() {
-        delete h_ranges;
-        delete h_ranges_page_starts;
-        delete h_ranges_dists;
+        delete[] h_ranges;
+        delete[] h_ranges_page_starts;
+        delete[] h_ranges_dists;
     }
 
 

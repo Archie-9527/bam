@@ -303,6 +303,7 @@ uint32_t nvm_dis_node_from_ctrl(const nvm_ctrl_t* ctrl);
 #endif
 #endif
 
+#ifdef __CUDACC__
 __forceinline__ __device__ uint32_t lane_id()
 {
     uint32_t ret;
@@ -324,4 +325,5 @@ __forceinline__ __device__ uint32_t get_smid() {
      return ret;
 }
 
+#endif /* __CUDACC__ */
 #endif /* __NVM_UTIL_H__ */

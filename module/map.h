@@ -28,6 +28,7 @@ struct map
     void*               data;           /* Custom data */
     release             release;        /* Custom callback for unmapping and releasing memory */
     unsigned long       n_addrs;        /* Number of mapped pages */
+    unsigned long       n_dma_addrs;    /* Successfully DMA-mapped host pages */
     uint64_t            addrs[];       /* Bus addresses */
 };
 

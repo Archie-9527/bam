@@ -104,7 +104,7 @@ uint32_t move_head_cq(nvm_queue_t* q, uint32_t cur_head, nvm_queue_t* sq) {
     count -= 1;
     if (count) {
         uint32_t loc_ = (cur_head + (count -1)) & q->qs_minus_1;
-        uint32_t cpl_entry = ((nvm_cpl_t*)q->vaddr)[loc_].dword[2];
+        uint32_t cpl_entry = ((volatile nvm_cpl_t*)q->vaddr)[loc_].dword[2];
         uint16_t new_sq_head =  (cpl_entry & 0x0000ffff);
         uint32_t sq_move_count = 0;
         uint32_t cur_sq_head = sq->head.load(cuda::std::memory_order_relaxed);
@@ -277,6 +277,7 @@ uint16_t sq_enqueue(nvm_queue_t* sq, nvm_cmd_t* cmd, cuda::atomic<uint64_t, cuda
     if (pc_tail) {
         *cur_pc_tail = pc_tail->load(cuda::std::memory_order_relaxed);
     }
+    __threadfence_system();
     sq->tail_mark[pos].val.store(LOCKED, cuda::std::memory_order_release);
     /*     while (((pos+1) & sq->qs_minus_1) == (sq->head.load(cuda::std::memory_order_acquire) & (sq->qs_minus_1))) { */
 /* #if defined(__CUDACC__) && (__CUDA_ARCH__ >= 700 || !defined(__CUDA_ARCH__)) */
@@ -390,7 +391,7 @@ uint32_t cq_poll(nvm_queue_t* cq, uint16_t search_cid, uint32_t* loc_ = NULL, ui
             uint32_t cur_head = head + i;
             bool search_phase = ((~(cur_head >> cq->qs_log2)) & 0x01);
             uint32_t loc = cur_head & (cq->qs_minus_1);
-            uint32_t cpl_entry = ((nvm_cpl_t*)cq->vaddr)[loc].dword[3];
+            uint32_t cpl_entry = ((volatile nvm_cpl_t*)cq->vaddr)[loc].dword[3];
             uint32_t cid = (cpl_entry & 0x0000ffff);
             bool phase = (cpl_entry & 0x00010000) >> 16;
 //             if (j % 10000000 == 0)

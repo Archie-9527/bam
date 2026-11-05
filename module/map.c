@@ -14,11 +14,24 @@
 #ifdef _CUDA
 #include <nv-p2p.h>
 
-struct gpu_region
-{
-    nvidia_p2p_page_table_t* pages;
-    nvidia_p2p_dma_mapping_t** mappings;
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/atomic.h>
+struct gpu_region {
+    nvidia_p2p_page_table_t *pages;
+    nvidia_p2p_dma_mapping_t *mapping;
+    struct pci_dev *peer;
+    bool pages_owned, mapping_owned;
+    bool module_owned;
+    u64 reserved_bytes;
 };
+static char *dma_peer_bdf;
+module_param(dma_peer_bdf, charp, 0444);
+MODULE_PARM_DESC(dma_peer_bdf, "Map GPU memory for this DMA peer (DSA PCI BDF), not the virtual NVMe controller");
+static unsigned int max_gpu_pinned_mb = 32;
+module_param(max_gpu_pinned_mb, uint, 0444);
+static atomic64_t gpu_pinned = ATOMIC64_INIT(0);
+static atomic_t gpu_cleanup_fault = ATOMIC_INIT(0);
 #endif
 
 
@@ -50,6 +63,7 @@ static struct map* create_descriptor(const struct ctrl* ctrl, u64 vaddr, unsigne
     map->data = NULL;
     map->release = NULL;
     map->n_addrs = n_pages;
+    map->n_dma_addrs = 0;
 
 
     for (i = 0; i < map->n_addrs; ++i)
@@ -71,6 +85,8 @@ void unmap_and_release(struct map* map)
         map->release(map);
     }
 
+    /* A failed GPU cleanup retains all owned handles and its module pin. */
+    if (map->data) return;
     kvfree(map);
 }
 
@@ -108,7 +124,7 @@ static void release_user_pages(struct map* map)
     struct device* dev;
 
     dev = &map->pdev->dev;
-    for (i = 0; i < map->n_addrs; ++i)
+    for (i = 0; i < map->n_dma_addrs; ++i)
     {
         dma_unmap_page(dev, map->addrs[i], PAGE_SIZE, DMA_BIDIRECTIONAL);
     }
@@ -155,19 +171,18 @@ static long map_user_pages(struct map* map)
 #endif
     if (retval <= 0)
     {
-        kfree(pages);
+        kvfree(pages);
         printk(KERN_ERR "get_user_pages() failed: %ld\n", retval);
-        return retval;
+        return retval < 0 ? retval : -ENOMEM;
     }
 
-    if (map->n_addrs != retval)
-    {
-        printk(KERN_WARNING "Requested %lu GPU pages, but only got %ld\n", map->n_addrs, retval);
-    }
-    map->n_addrs = retval;
     map->page_size = PAGE_SIZE;
     map->data = (void*) pages;
     map->release = release_user_pages;
+    if (map->n_addrs != retval) {
+        map->n_addrs = retval;
+        return -ENOMEM;
+    }
 
     dev = &map->pdev->dev;
     for (i = 0; i < map->n_addrs; ++i)
@@ -178,8 +193,9 @@ static long map_user_pages(struct map* map)
         if (retval != 0)
         {
             printk(KERN_ERR "Failed to map page for some reason\n");
-            return retval;
+            return -EIO;
         }
+        map->n_dma_addrs++;
        // printk("map_user_page: device: %02x:%02x.%1x\tvaddr: %llx\ti: %lu\tdma_addr: %llx\n", map->pdev->bus->number, PCI_SLOT(map->pdev->devfn), PCI_FUNC(map->pdev->devfn), (uint64_t) map->vaddr, i, map->addrs[i]);
     }
 
@@ -193,7 +209,7 @@ struct map* map_userspace(struct list* list, const struct ctrl* ctrl, u64 vaddr,
     long err;
     struct map* md;
 
-    if (n_pages < 1)
+    if (n_pages < 1 || n_pages > (SIZE_MAX - sizeof(struct map)) / sizeof(uint64_t) || n_pages > SIZE_MAX / GPU_PAGE_SIZE)
     {
         return ERR_PTR(-EINVAL);
     }
@@ -223,180 +239,87 @@ struct map* map_userspace(struct list* list, const struct ctrl* ctrl, u64 vaddr,
 
 
 #ifdef _CUDA
-static void force_release_gpu_memory(struct map* map)
+static void release_gpu_memory(struct map *map)
 {
-    struct gpu_region* gd = (struct gpu_region*) map->data;
-    struct list* list = map->ctrl_list;
-
-    if (gd != NULL)
-    {
-        if (gd->mappings != NULL)
-        {
-            const struct list_node* element = list_next(&list->head);
-            struct ctrl* ctrl;
-
-            uint32_t j = 0;
-            while (element != NULL)
-            {
-                ctrl = container_of(element, struct ctrl, list);
-                if (gd->mappings[j] != NULL)
-                    nvidia_p2p_dma_unmap_pages(ctrl->pdev, gd->pages, gd->mappings[j++]);
-
-                element = list_next(element);
-            }
-            kfree(gd->mappings);
-
-        }
-
-        if (gd->pages != NULL)
-        {
-            nvidia_p2p_free_page_table(gd->pages);
-        }
-
-        kfree(gd);
-        map->data = NULL;
-
-        printk(KERN_DEBUG "Nvidia driver forcefully reclaimed %lu GPU pages\n", map->n_addrs);
+    struct gpu_region *gd = map->data;
+    int ret;
+    if (!gd) return;
+    if (gd->mapping_owned) {
+        ret = nvidia_p2p_dma_unmap_pages(gd->peer, gd->pages, gd->mapping);
+        if (ret) goto quarantine;
+        gd->mapping_owned = false;
     }
-
-    unmap_and_release(map);
-}
-#endif
-
-
-
-#ifdef _CUDA
-void release_gpu_memory(struct map* map)
-{
-    struct gpu_region* gd = (struct gpu_region*) map->data;
-    struct list* list = map->ctrl_list;
-
-    if (gd != NULL)
-    {
-        if (gd->mappings != NULL)
-        {
-            const struct list_node* element = list_next(&list->head);
-            struct ctrl* ctrl;
-
-            uint32_t j = 0;
-            while (element != NULL)
-            {
-                ctrl = container_of(element, struct ctrl, list);
-                if (gd->mappings[j] != NULL)
-                    nvidia_p2p_dma_unmap_pages(ctrl->pdev, gd->pages, gd->mappings[j++]);
-
-                element = list_next(element);
-            }
-            kfree(gd->mappings);
-
-        }
-
-        if (gd->pages != NULL)
-        {
-            nvidia_p2p_put_pages(0, 0, map->vaddr, gd->pages);
-        }
-
-        kfree(gd);
-        map->data = NULL;
-
-        //printk(KERN_DEBUG "Released %lu GPU pages\n", map->n_addrs);
+    if (gd->pages_owned) {
+        ret = nvidia_p2p_put_pages_persistent(map->vaddr, gd->pages, 0);
+        if (ret) goto quarantine;
+        gd->pages_owned = false;
     }
+    atomic64_sub(gd->reserved_bytes, &gpu_pinned);
+    if (gd->peer) pci_dev_put(gd->peer);
+    {
+        bool owned = gd->module_owned;
+        kfree(gd); map->data = NULL;
+        if (owned) module_put(THIS_MODULE);
+    }
+    return;
+quarantine:
+    atomic_set(&gpu_cleanup_fault, 1);
+    pr_err("libnvm: GPU cleanup failed: %d; retaining mappings and module, refusing new GPU maps\n", ret);
 }
-#endif
-
-
-
-#ifdef _CUDA
-int map_gpu_memory(struct map* map, struct list* list)
+static int map_gpu_memory(struct map *map, struct list *list)
 {
+    struct gpu_region *gd;
+    nvidia_p2p_page_table_t *pages = NULL;
+    nvidia_p2p_dma_mapping_t *mapping = NULL;
+    unsigned int domain, bus, slot, fn;
     unsigned long i;
-    uint32_t j;
-    int err;
-    struct gpu_region* gd;
-    const struct list_node* element;
-    struct ctrl* ctrl;
-
-    gd = kmalloc(sizeof(struct gpu_region), GFP_KERNEL);
-    if (gd == NULL)
-    {
-        printk(KERN_CRIT "Failed to allocate mapping descriptor\n");
-        return -ENOMEM;
+    char extra;
+    int ret;
+    u64 bytes = GPU_PAGE_SIZE * map->n_addrs;
+    if (atomic_read(&gpu_cleanup_fault)) return -EIO;
+    if (!max_gpu_pinned_mb || bytes > (u64)max_gpu_pinned_mb * 1024 * 1024) return -ENOSPC;
+    if (atomic64_add_return(bytes, &gpu_pinned) > (u64)max_gpu_pinned_mb * 1024 * 1024) {
+        atomic64_sub(bytes, &gpu_pinned); return -ENOSPC;
     }
-
-    gd->mappings = (nvidia_p2p_dma_mapping_t**)  kmalloc(sizeof(nvidia_p2p_dma_mapping_t*) * max_num_ctrls, GFP_KERNEL);
-    
-    if (gd->mappings == NULL)
-    {
-        printk(KERN_CRIT "Failed to allocate mapping descriptor\n");
-        kfree(gd);
-        return -ENOMEM;
+    gd = kzalloc(sizeof(*gd), GFP_KERNEL);
+    if (!gd) { atomic64_sub(bytes, &gpu_pinned); return -ENOMEM; }
+    gd->reserved_bytes = bytes;
+    map->data = gd; map->release = release_gpu_memory;
+    if (dma_peer_bdf && *dma_peer_bdf) {
+        if (sscanf(dma_peer_bdf, "%x:%x:%x.%x%c", &domain, &bus, &slot, &fn, &extra) != 4 ||
+            domain > 65535 || bus > 255 || slot > 31 || fn > 7) return -EINVAL;
+        gd->peer = pci_get_domain_bus_and_slot(domain, bus, PCI_DEVFN(slot, fn));
+    } else gd->peer = pci_dev_get(map->pdev);
+    if (!gd->peer) return -ENODEV;
+    /* Keep the helper resident until this persistent mapping is released.
+     * An abandoned process therefore cannot trigger unsafe module-exit cleanup. */
+    if (!try_module_get(THIS_MODULE)) return -EBUSY;
+    gd->module_owned = true;
+    /* Failed API outputs are not owned handles. */
+    ret = nvidia_p2p_get_pages_persistent(map->vaddr, bytes, &pages, 0);
+    if (ret) {
+        pr_err("libnvm: persistent GPU pin failed: %d, va=%#llx bytes=%llu peer=%s\n", ret,
+               map->vaddr, bytes, pci_name(gd->peer));
+        return ret;
     }
-    for (j = 0; j < max_num_ctrls; j++)
-        gd->mappings[j] = NULL;
-
-    gd->pages = NULL;
-    //gd->mappings = NULL;
-
-    map->page_size = GPU_PAGE_SIZE;
-    map->data = gd;
-    map->release = release_gpu_memory;
-
-    err = nvidia_p2p_get_pages(0, 0, map->vaddr, GPU_PAGE_SIZE * map->n_addrs, &gd->pages, 
-            (void (*)(void*)) force_release_gpu_memory, map);
-    if (err != 0)
-    {
-        printk(KERN_ERR "nvidia_p2p_get_pages() failed: %d\n", err);
-        return err;
+    if (!pages) return -EIO;
+    gd->pages = pages; gd->pages_owned = true;
+    if (!NVIDIA_P2P_PAGE_TABLE_VERSION_COMPATIBLE(pages) ||
+        pages->page_size != NVIDIA_P2P_PAGE_SIZE_64KB || pages->entries < map->n_addrs) return -EOPNOTSUPP;
+    ret = nvidia_p2p_dma_map_pages(gd->peer, pages, &mapping);
+    if (ret) {
+        pr_err("libnvm: GPU DMA map failed: %d, peer=%s\n", ret, pci_name(gd->peer));
+        return ret;
     }
-
-    element = list_next(&list->head);
-
-
-    j = 0;
-    while (element != NULL)
-    {
-        ctrl = container_of(element, struct ctrl, list);
-
-        err = nvidia_p2p_dma_map_pages(ctrl->pdev, gd->pages, gd->mappings + (j++));
-        if (err != 0)
-        {
-            //printk(KERN_ERR "nvidia_p2p_dma_map_pages() failed for nvme%u: %d\n", j-1, err);
-            return err;
-        }
-        //for (i = 0; i < map->n_addrs; ++i)
-        //{
-
-        //   printk("device: %u\ti: %lu\tpaddr: %llx\n", (j-1), i, (uint64_t)  gd->mappings[j-1]->dma_addresses[i]);
-        //}
-        if (j == 1) {
-            for (i = 0; i < map->n_addrs; ++i)
-            {
-                map->addrs[i] = gd->mappings[0]->dma_addresses[i];
-                //printk("++paddr: %llx\n", (uint64_t) map->addrs[i]);
-            }
-        }
-        element = list_next(element);
-    }
-
-
-
-
-    if (map->n_addrs != gd->pages->entries)
-    {
-        printk(KERN_WARNING "Requested %lu GPU pages, but only got %u\n", map->n_addrs, gd->pages->entries);
-    }
-
-    map->n_addrs = gd->pages->entries;
-
-    //printk("vaddr: %llx\n", (uint64_t) map->vaddr);
-//    for (j = 0; j < map->n_addrs; j++)
-//        printk("\tpaddr: %llx\n", (uint64_t) map->addrs[j]);
-    
+    if (!mapping) return -EIO;
+    gd->mapping = mapping; gd->mapping_owned = true;
+    if (!NVIDIA_P2P_DMA_MAPPING_VERSION_COMPATIBLE(mapping) ||
+        mapping->page_size_type != NVIDIA_P2P_PAGE_SIZE_64KB ||
+        mapping->entries < map->n_addrs || !mapping->dma_addresses) return -EOPNOTSUPP;
+    for (i = 0; i < map->n_addrs; ++i) map->addrs[i] = mapping->dma_addresses[i];
     return 0;
 }
 #endif
-
-
 
 #ifdef _CUDA
 struct map* map_device_memory(struct list* list, const struct ctrl* ctrl, u64 vaddr, unsigned long n_pages, struct list* ctrl_list)
@@ -404,7 +327,7 @@ struct map* map_device_memory(struct list* list, const struct ctrl* ctrl, u64 va
     int err;
     struct map* md = NULL;
 
-    if (n_pages < 1)
+    if (n_pages < 1 || n_pages > (SIZE_MAX - sizeof(struct map)) / sizeof(uint64_t) || n_pages > SIZE_MAX / GPU_PAGE_SIZE)
     {
         return ERR_PTR(-EINVAL);
     }

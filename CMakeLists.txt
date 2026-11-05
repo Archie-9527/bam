@@ -144,7 +144,7 @@ endif ()
 # Create NVME library target
 CUDA_ADD_LIBRARY (libnvm ${libnvm_source} ${libnvm_linux_source}) # TODO: add check for OS
 target_include_directories (libnvm PRIVATE "${libnvm_root}")
-target_link_libraries(libnvm ${CUDA_LIBRARIES})
+target_link_libraries(libnvm ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
 target_compile_definitions(libnvm PRIVATE _CUDA __CUDA__)
 
 if (sisci_include AND sisci_lib AND NOT no_smartio)

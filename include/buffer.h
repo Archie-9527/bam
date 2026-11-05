@@ -86,6 +86,12 @@ static void getDeviceMemory(int device, void*& bufferPtr, void*& devicePtr, size
     }
 
     origPtr = bufferPtr;
+    unsigned int sync_memops = 1;
+    if (cuPointerSetAttribute(&sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                              reinterpret_cast<CUdeviceptr>(origPtr)) != CUDA_SUCCESS) {
+        cudaFree(origPtr);
+        throw error("Failed to enable GPUDirect synchronous memory operations");
+    }
     //devicePtr = (void*) (((uint64_t)attrs.devicePointer));
     devicePtr = (void*) ((((uint64_t)attrs.devicePointer) + (64*1024)) & 0xffffffffff0000);
     bufferPtr = (void*) ((((uint64_t)bufferPtr) + (64*1024))  & 0xffffffffff0000);
