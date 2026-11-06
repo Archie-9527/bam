@@ -30,6 +30,7 @@ module_param(dma_peer_bdf, charp, 0444);
 MODULE_PARM_DESC(dma_peer_bdf, "Map GPU memory for this DMA peer (DSA PCI BDF), not the virtual NVMe controller");
 static unsigned int max_gpu_pinned_mb = 32;
 module_param(max_gpu_pinned_mb, uint, 0444);
+MODULE_PARM_DESC(max_gpu_pinned_mb, "Total GPU P2P pin budget in MiB (queues plus payload; not preallocated), default 32");
 static atomic64_t gpu_pinned = ATOMIC64_INIT(0);
 static atomic_t gpu_cleanup_fault = ATOMIC_INIT(0);
 #endif
