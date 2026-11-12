@@ -6,6 +6,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/device.h>
+#include <linux/miscdevice.h>
 
 
 /*
@@ -19,7 +20,7 @@ struct ctrl
     int                 number;     /* Controller number */
     dev_t               rdev;       /* Character device register */
     struct class*       cls;        /* Character device class */
-    struct cdev         cdev;       /* Character device */
+    struct miscdevice miscdev; /* 动态 minor，节点名称仍为 /dev/libnvmN */
     struct device*      chrdev;     /* Character device handle */
 };
 

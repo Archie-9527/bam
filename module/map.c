@@ -222,6 +222,7 @@ struct map* map_userspace(struct list* list, const struct ctrl* ctrl, u64 vaddr,
 
 
 #ifdef _CUDA
+#ifndef NVIDIA_P2P_CAP_GET_PAGES_PERSISTENT_API
 static void force_release_gpu_memory(struct map* map)
 {
     struct gpu_region* gd = (struct gpu_region*) map->data;
@@ -264,7 +265,10 @@ static void force_release_gpu_memory(struct map* map)
 
 
 
+#endif /* legacy invalidation callback */
+
 #ifdef _CUDA
+
 void release_gpu_memory(struct map* map)
 {
     struct gpu_region* gd = (struct gpu_region*) map->data;
@@ -292,7 +296,11 @@ void release_gpu_memory(struct map* map)
 
         if (gd->pages != NULL)
         {
+#ifdef NVIDIA_P2P_CAP_GET_PAGES_PERSISTENT_API
+            nvidia_p2p_put_pages_persistent(map->vaddr, gd->pages, 0);
+#else
             nvidia_p2p_put_pages(0, 0, map->vaddr, gd->pages);
+#endif
         }
 
         kfree(gd);
@@ -340,8 +348,13 @@ int map_gpu_memory(struct map* map, struct list* list)
     map->data = gd;
     map->release = release_gpu_memory;
 
+#ifdef NVIDIA_P2P_CAP_GET_PAGES_PERSISTENT_API
+    err = nvidia_p2p_get_pages_persistent(map->vaddr,
+            GPU_PAGE_SIZE * map->n_addrs, &gd->pages, 0);
+#else
     err = nvidia_p2p_get_pages(0, 0, map->vaddr, GPU_PAGE_SIZE * map->n_addrs, &gd->pages, 
             (void (*)(void*)) force_release_gpu_memory, map);
+#endif
     if (err != 0)
     {
         printk(KERN_ERR "nvidia_p2p_get_pages() failed: %d\n", err);

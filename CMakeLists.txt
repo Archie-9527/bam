@@ -1,5 +1,10 @@
-cmake_minimum_required (VERSION 3.24)
-set(CMAKE_CUDA_ARCHITECTURES native)
+cmake_minimum_required (VERSION 3.22)
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    if (CMAKE_VERSION VERSION_LESS 3.24)
+        message(FATAL_ERROR "CMake < 3.24 requires -DCMAKE_CUDA_ARCHITECTURES=<GPU architecture>")
+    endif ()
+    set(CMAKE_CUDA_ARCHITECTURES native)
+endif ()
 project (libnvm LANGUAGES CUDA C CXX)
 
 set (CMAKE_C_STANDARD 99)
@@ -14,6 +19,7 @@ find_package (CUDA 8.0)
 
 set (DIS "/opt/DIS" CACHE PATH "SISCI install location")
 set (NVIDIA "" CACHE PATH "Path to Nvidia driver source")
+set (NVIDIA_SYMVERS "" CACHE FILEPATH "NVIDIA Module.symvers for the running kernel")
 set (KERNEL "/lib/modules/${CMAKE_SYSTEM_VERSION}/build" CACHE PATH "Path to kernel source, or module directory")
 set (FIO "" CACHE PATH "Path to FIO installation")
 
@@ -69,6 +75,12 @@ if (CUDA_FOUND AND NOT no_cuda)
     find_path (driver_include NAMES "nv-p2p.h" PATHS "${NVIDIA}" ${driver_paths})
     set (driver_dir "${driver_include}")
 
+    if (NVIDIA_SYMVERS)
+        if (NOT EXISTS "${NVIDIA_SYMVERS}")
+            message(FATAL_ERROR "NVIDIA_SYMVERS does not exist")
+        endif ()
+        get_filename_component(driver_dir "${NVIDIA_SYMVERS}" DIRECTORY)
+    else ()
     # Find Nvidia driver symbols
     if (NOT EXISTS "${driver_dir}/Module.symvers")
         get_filename_component (driver_dir "${driver_dir}" DIRECTORY)
@@ -78,6 +90,7 @@ if (CUDA_FOUND AND NOT no_cuda)
         message(STATUS "No NVIDIA driver symbols found")
     else ()
         message(STATUS "Using NVIDIA driver found in ${driver_dir}")
+    endif ()
     endif ()
 endif ()
 
@@ -196,8 +209,8 @@ if (NOT no_module)
 
     find_program(MAKE_EXECUTABLE make REQUIRED)
     set(module_ko "${module_output}/${module_name}.ko")
-    add_custom_command(OUTPUT ${module_ko} COMMAND ${MAKE_EXECUTABLE} WORKING_DIRECTORY "${module_output}")
-    add_custom_target(kernel_module ALL DEPENDS ${module_ko})
+    add_custom_target(kernel_module ALL COMMAND ${MAKE_EXECUTABLE}
+        WORKING_DIRECTORY "${module_output}" VERBATIM)
 
     install(FILES ${module_ko} DESTINATION "module")
 endif ()
