@@ -471,7 +471,7 @@ int main(int argc, char *argv[]) {
         case UVM_READONLY:
             checkCudaErrors(cudaMallocManaged((void**)&edgeList_d, edge_size));
             file.read((char*)edgeList_d, edge_size);
-            checkCudaErrors(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
+            checkCudaErrors(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
 
             //checkCudaErrors(cudaMemGetInfo(&freebyte, &totalbyte));
             //if (totalbyte < 16*1024*1024*1024ULL)
@@ -486,7 +486,7 @@ int main(int argc, char *argv[]) {
             {/*
             checkCudaErrors(cudaMallocManaged((void**)&edgeList_d, edge_size));
             file.read((char*)edgeList_d, edge_size);
-            checkCudaErrors(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, 0));
+            checkCudaErrors(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, 0));
             break;
             */
             file.close();
@@ -502,7 +502,7 @@ int main(int argc, char *argv[]) {
             uint64_t edge_count_4k_aligned = ((edge_count + 2 + 4096 / sizeof(uint64_t)) / (4096 / sizeof(uint64_t))) * (4096 / sizeof(uint64_t));
             uint64_t edge_size_4k_aligned = edge_count_4k_aligned * sizeof(uint64_t);
             checkCudaErrors(cudaMallocManaged((void**)&edgeList_d, edge_size_4k_aligned));
-            checkCudaErrors(cudaMemAdvise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy, 0));
+            checkCudaErrors(nvm_cuda_mem_advise(edgeList_d, edge_size_4k_aligned, cudaMemAdviseSetAccessedBy, 0));
             high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                   
             if (fread(edgeList_d, sizeof(uint64_t), edge_count_4k_aligned, file_temp) != edge_count + 2) {
@@ -526,9 +526,9 @@ int main(int argc, char *argv[]) {
             checkCudaErrors(cudaSetDevice(0));
             checkCudaErrors(cudaMallocManaged((void**)&edgeList_d, edge_size));
             file.read((char*)edgeList_d, edge_size);
-            checkCudaErrors(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
+            checkCudaErrors(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetReadMostly, 0));
             checkCudaErrors(cudaSetDevice(2));
-            checkCudaErrors(cudaMemPrefetchAsync(edgeList_d, edge_size, 2, 0));
+            checkCudaErrors(nvm_cuda_mem_prefetch_async(edgeList_d, edge_size, 2, 0));
             checkCudaErrors(cudaDeviceSynchronize());
             checkCudaErrors(cudaSetDevice(0));
             break;
@@ -536,10 +536,10 @@ int main(int argc, char *argv[]) {
             checkCudaErrors(cudaSetDevice(2));
             checkCudaErrors(cudaMallocManaged((void**)&edgeList_d, edge_size));
             file.read((char*)edgeList_d, edge_size);
-            checkCudaErrors(cudaMemPrefetchAsync(edgeList_d, edge_size, 2, 0));
+            checkCudaErrors(nvm_cuda_mem_prefetch_async(edgeList_d, edge_size, 2, 0));
             checkCudaErrors(cudaDeviceSynchronize());
             checkCudaErrors(cudaSetDevice(0));
-            checkCudaErrors(cudaMemAdvise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, 0));
+            checkCudaErrors(nvm_cuda_mem_advise(edgeList_d, edge_size, cudaMemAdviseSetAccessedBy, 0));
             break;
         //case DRAGON_MAP:
         //    if((dragon_map(edge_file.c_str(), (edge_size+16), D_F_READ, (void**) &edgeList_dtmp)) != D_OK){

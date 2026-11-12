@@ -1,8 +1,10 @@
-cmake_minimum_required (VERSION 3.1)
+cmake_minimum_required (VERSION 3.24)
+set(CMAKE_CUDA_ARCHITECTURES native)
 project (libnvm LANGUAGES CUDA C CXX)
 
 set (CMAKE_C_STANDARD 99)
-set (CMAKE_CXX_STANDARD 11)
+set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CUDA_STANDARD 17)
 
 set (THREADS_PREFER_PTHREAD_FLAG ON)
 find_package (Threads REQUIRED)
@@ -30,11 +32,8 @@ if (no_smartio)
     set (no_smartio_benchmarks true)
 endif ()
 
-# Set global compiler flags
-set (GPU_ARCHS "" CACHE INTERNAL "" FORCE)
-foreach (arch ${nvidia_archs})
-    string (CONCAT GPU_ARCHS ${GPU_ARCHS} " -gencode arch=compute_${arch},code=sm_${arch}")
-endforeach ()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set (module_name "libnvm")
 
 set (convert_warnings implicit-function-declaration incompatible-pointer-types int-conversion return-type unused-function unused-variable)
 set (flags "")
@@ -44,11 +43,11 @@ endforeach()
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra ${flags}" CACHE INTERNAL "" FORCE)
 set (CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_DEBUG} -g -DDEBUG" CACHE INTERNAL "" FORCE)
 set (CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2" CACHE INTERNAL "" FORCE)
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++11" CACHE INTERNAL "" FORCE)
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=gnu++17" CACHE INTERNAL "" FORCE)
 set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG " CACHE INTERNAL "" FORCE)
-set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -std=c++11" CACHE INTERNAL "" FORCE)
-set (CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo -D__CUDA__ -D__CUDACC__ -O3;-std=c++11;${GPU_ARCHS}")
-set (CUDA_NVCC_FLAGS_RELEASE "${CMAKE_NVCC_FLAGS_RELEASE} -O2" CACHE INTERNAL "" FORCE)
+set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -std=gnu++17" CACHE INTERNAL "" FORCE)
+# set (CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo -D__CUDA__ -D__CUDACC__ -O3;-std=c++11;${GPU_ARCHS}")
+# set (CUDA_NVCC_FLAGS_RELEASE "${CMAKE_NVCC_FLAGS_RELEASE} -O2" CACHE INTERNAL "" FORCE)
 
 if (no_cc)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D__NO_COHERENCE__")
@@ -130,6 +129,14 @@ set (fio_output "${CMAKE_BINARY_DIR}/fio")
 
 # Set include directories
 include_directories ("${PROJECT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/include/freestanding/include")
+find_path (cuda_cccl_include NAMES cuda/atomic
+    PATHS
+        "${CUDA_TOOLKIT_ROOT_DIR}/include/cccl"
+        "${CUDA_TOOLKIT_ROOT_DIR}/targets/${CMAKE_SYSTEM_PROCESSOR}-linux/include/cccl")
+if (cuda_cccl_include)
+    include_directories ("${cuda_cccl_include}")
+    message (STATUS "Using CUDA CCCL headers ${cuda_cccl_include}")
+endif ()
 if (sisci_include)
     include_directories ("${PROJECT_BINARY_DIR}/include" "${PROJECT_SOURCE_DIR}/include" "${sisci_include}" "${sisci_include}/dis")
 endif ()
@@ -139,6 +146,7 @@ endif ()
 CUDA_ADD_LIBRARY (libnvm ${libnvm_source} ${libnvm_linux_source}) # TODO: add check for OS
 target_include_directories (libnvm PRIVATE "${libnvm_root}")
 target_link_libraries(libnvm ${CUDA_LIBRARIES})
+target_compile_definitions(libnvm PRIVATE _CUDA __CUDA__)
 
 if (sisci_include AND sisci_lib AND NOT no_smartio)
     target_sources (libnvm PRIVATE ${libnvm_dis_source})
@@ -163,7 +171,7 @@ endif ()
 set_target_properties (libnvm PROPERTIES OUTPUT_NAME "nvm")
 
 # Set install locations
-install (FILES ${libnvm_include} DESTINATION "include")
+# install (FILES ${libnvm_include} DESTINATION "include")
 install (TARGETS libnvm DESTINATION "lib")
 
 
@@ -179,9 +187,19 @@ if (NOT no_module)
         message(STATUS "Configuring kernel module without CUDA")
     endif ()
 
+    file (GLOB module_files "${module_root}/*.c" "${module_root}/*.h")
+    foreach (module_file ${module_files})
+        get_filename_component (module_file_name "${module_file}" NAME)
+        configure_file ("${module_file}" "${module_output}/${module_file_name}" COPYONLY)
+    endforeach ()
     configure_file ("${module_root}/Makefile.in" "${module_output}/Makefile" @ONLY)
 
-    add_custom_target (kernel_module "${CMAKE_MAKE_PROGRAM}" WORKING_DIRECTORY "${module_output}")
+    find_program(MAKE_EXECUTABLE make REQUIRED)
+    set(module_ko "${module_output}/${module_name}.ko")
+    add_custom_command(OUTPUT ${module_ko} COMMAND ${MAKE_EXECUTABLE} WORKING_DIRECTORY "${module_output}")
+    add_custom_target(kernel_module ALL DEPENDS ${module_ko})
+
+    install(FILES ${module_ko} DESTINATION "module")
 endif ()
 
 
@@ -252,16 +270,30 @@ endmacro ()
 # We assume all benchmarks are CUDA programs
 macro (make_benchmark target binary_name files)
     if (CUDA_FOUND AND NOT no_cuda)
-        cuda_add_executable (${target} EXCLUDE_FROM_ALL ${files} OPTIONS ${GPU_ARCHS} -D__CUDA__) # Ugly bugly
-        target_compile_definitions (${target} PRIVATE __CUDA__)
-
-        add_dependencies (${target} libnvm)
+        add_executable (${target} ${files})
+        
         target_link_libraries (${target} libnvm)
         target_link_libraries (${target} ${CUDA_LIBRARIES})
         set_target_properties (${target} PROPERTIES OUTPUT_NAME "nvm-${binary_name}")
 
+        set_target_properties(${target} PROPERTIES 
+            BUILD_RPATH "\$ORIGIN"
+            INSTALL_RPATH "\$ORIGIN/../lib"
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+            CUDA_SEPARABLE_COMPILATION ON)
+
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-O3>
+            $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+        )
+        
         list (APPEND benchmark_targets "${target}")
         set (benchmark_targets "${benchmark_targets}" PARENT_SCOPE)
+
+        install(TARGETS ${target} DESTINATION "bin")
     endif ()
 endmacro ()
 
@@ -333,4 +365,3 @@ if (CUDA_FOUND AND NOT no_cuda)
   #add_subdirectory ("${benchmarks_root}/scan")
   add_custom_target (benchmarks DEPENDS ${benchmark_targets})
 endif ()
-

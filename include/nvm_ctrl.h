@@ -33,7 +33,7 @@
  *
  * Note: fd must be opened with O_RDWR and O_NONBLOCK
  */
-int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd);
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, int fd, size_t mm_size);
 #endif
 
 

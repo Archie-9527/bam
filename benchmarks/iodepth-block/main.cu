@@ -107,8 +107,8 @@ void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t req_
     uint32_t queue;
     if (laneid == 0) {
 	ctrl = smid % (pc->n_ctrls);
-        //ctrl = pc->ctrl_counter->fetch_add(1, simt::memory_order_relaxed) % (pc->n_ctrls);
-        queue = ctrls[ctrl]->queue_counter.fetch_add(1, simt::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
+        //ctrl = pc->ctrl_counter->fetch_add(1, cuda::std::memory_order_relaxed) % (pc->n_ctrls);
+        queue = ctrls[ctrl]->queue_counter.fetch_add(1, cuda::std::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
         //queue = smid % (ctrls[ctrl]->n_qps);
     }
     ctrl =  __shfl_sync(0xFFFFFFFF, ctrl, 0);
@@ -159,8 +159,8 @@ void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t 
     uint32_t queue;
     if (laneid == 0) {
 	ctrl = smid % (pc->n_ctrls);
-        //ctrl = pc->ctrl_counter->fetch_add(1, simt::memory_order_relaxed) % (pc->n_ctrls);
-        queue = ctrls[ctrl]->queue_counter.fetch_add(1, simt::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
+        //ctrl = pc->ctrl_counter->fetch_add(1, cuda::std::memory_order_relaxed) % (pc->n_ctrls);
+        queue = ctrls[ctrl]->queue_counter.fetch_add(1, cuda::std::memory_order_relaxed) %  (ctrls[ctrl]->n_qps);
         //queue = smid % (ctrls[ctrl]->n_qps);
     }
     ctrl =  __shfl_sync(0xFFFFFFFF, ctrl, 0);

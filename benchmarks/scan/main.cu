@@ -287,7 +287,7 @@ int main(int argc, char *argv[]) {
                 {
                 cuda_err_chk(cudaMallocManaged((void**)&a_d, n_elems_size));
                 cuda_err_chk(cudaMemcpy(a_d, a_h, n_elems_size, cudaMemcpyHostToDevice));
-                cuda_err_chk(cudaMemAdvise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(a_d, n_elems_size, cudaMemAdviseSetReadMostly, settings.cudaDevice));
                 break;
                 }
             case UVM_DIRECT:
@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
                 uint64_t size_4k_aligned = count_4k_aligned * sizeof(uint64_t);
 
                 cuda_err_chk(cudaMallocManaged((void**)&a_d, size_4k_aligned));
-                cuda_err_chk(cudaMemAdvise(a_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
+                cuda_err_chk(nvm_cuda_mem_advise(a_d, size_4k_aligned, cudaMemAdviseSetAccessedBy, settings.cudaDevice));
                 high_resolution_clock::time_point ft1 = high_resolution_clock::now();
                
                 if (fread(a_d, sizeof(uint64_t), count_4k_aligned, fa_tmp)) {

@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <stdio.h>
+#include <algorithm>
 #include "linux/map.h"
 #include "linux/ioctl.h"
 #include "lib_ctrl.h"
@@ -107,7 +108,7 @@ static void ioctl_unmap(const struct device* dev, const struct va_range* va)
 
 
 
-int nvm_ctrl_init(nvm_ctrl_t** ctrl, int filedes)
+int nvm_ctrl_init(nvm_ctrl_t** ctrl, int filedes, size_t mm_size)
 {
     int err;
     struct device* dev;
@@ -142,7 +143,7 @@ int nvm_ctrl_init(nvm_ctrl_t** ctrl, int filedes)
         return errno;
     }
 
-    const size_t mm_size = NVM_CTRL_MEM_MINSIZE;
+    mm_size = std::max((size_t)NVM_CTRL_MEM_MINSIZE, mm_size);
     void* mm_ptr = mmap(NULL, mm_size, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FILE|MAP_LOCKED, dev->fd, 0);
     if (mm_ptr == NULL)
     {
