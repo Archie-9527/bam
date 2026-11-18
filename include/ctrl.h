@@ -1,4 +1,8 @@
 
+/**
+ * @file
+ * @brief BaM 的 CPU 侧控制器初始化和 GPU 可访问的队列对描述。
+ */
 #ifndef __BENCHMARK_CTRL_H__
 #define __BENCHMARK_CTRL_H__
 
@@ -37,29 +41,30 @@
 #define MAX_QUEUES 65535
 
 
+/// @brief 聚合 NVMe 控制器引用、管理队列、namespace 信息和 I/O 队列对。
 struct Controller
 {
     cuda::atomic<uint64_t, cuda::thread_scope_device> access_counter;
-    nvm_ctrl_t*             ctrl;
-    nvm_aq_ref              aq_ref;
-    DmaPtr                  aq_mem;
+    nvm_ctrl_t*             ctrl; /**< libnvm 控制器句柄，持有 BAR 映射及控制器属性。 */
+    nvm_aq_ref              aq_ref; /**< 提交主机侧管理命令的队列引用。 */
+    DmaPtr                  aq_mem; /**< 管理队列及 Identify 数据缓冲区所在的主机 DMA 内存。 */
     struct nvm_ctrl_info    info;
     struct nvm_ns_info      ns;
     uint16_t                n_sqs;
     uint16_t                n_cqs;
-    uint16_t                n_qps;
+    uint16_t                n_qps; /**< 实际创建并提供给 GPU 使用的 I/O 队列对数量。 */
     uint32_t                deviceId;
-    QueuePair**             h_qps;
-    QueuePair*              d_qps;
+    QueuePair**             h_qps; /**< CPU 持有的队列对对象指针数组。 */
+    QueuePair*              d_qps; /**< GPU 内存中的队列对描述数组。 */
 
-    cuda::atomic<uint64_t, cuda::thread_scope_device> queue_counter;
+    cuda::atomic<uint64_t, cuda::thread_scope_device> queue_counter; /**< GPU 选择 I/O 队列时使用的轮转计数器。 */
 
     uint32_t page_size;
-    uint32_t blk_size;
+    uint32_t blk_size; /**< namespace 逻辑块的字节数。 */
     uint32_t blk_size_log;
 
 
-    void* d_ctrl_ptr;
+    void* d_ctrl_ptr; /**< GPU 侧 Controller 视图的地址。 */
     BufferPtr d_ctrl_buff;
 #ifdef __DIS_CLUSTER__
     Controller(uint64_t controllerId, uint32_t nvmNamespace, uint32_t adapter, uint32_t segmentId);
@@ -92,6 +97,11 @@ inline void Controller::print_reset_stats(void) {
     cuda_err_chk(cudaMemset(d_ctrl_ptr, 0, sizeof(cuda::atomic<uint64_t, cuda::thread_scope_device>)));
 }
 
+/**
+ * @brief 建立管理队列，读取控制器和 namespace 属性及当前队列数。
+ * @param[in,out] ctrl 正在初始化的控制器。
+ * @param ns_id 要识别的 NVMe namespace ID。
+ */
 static void initializeController(struct Controller& ctrl, uint32_t ns_id)
 {
     // Create admin queue reference
@@ -146,6 +156,15 @@ Controller::Controller(uint64_t ctrl_id, uint32_t ns_id, uint32_t)
 
 
 
+/**
+ * @brief 打开 libnvm 字符设备，初始化 NVMe 控制器并向 GPU 提供 I/O 队列对。
+ * @details CPU 先建立管理队列，再注册 BAR 映射并建立 GPU 上的 I/O SQ/CQ。
+ * @param path libnvm 字符设备路径。
+ * @param ns_id NVMe namespace ID。
+ * @param cudaDevice 分配 I/O 队列的 CUDA 设备编号。
+ * @param queueDepth 每条 I/O 队列的请求深度上限。
+ * @param numQueues 请求使用的 I/O 队列对数量上限。
+ */
 inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDevice, uint64_t queueDepth, uint64_t numQueues)
     : ctrl(nullptr)
     , aq_ref(nullptr)
@@ -158,7 +177,8 @@ inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDev
     }
 
     // Get controller reference
-    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t page_size = sysconf(_SC_PAGESIZE); /**< 用于对齐 BAR 映射长度的系统页大小。 */
+    /// BAR 头部占 4096 B，每个队列对的两个 doorbell 共占 8 B，映射长度向上按页对齐。
     size_t mm_size = ((0x1000 + (numQueues + 1) * 8) + page_size - 1) & ~(page_size - 1);
     int status = nvm_ctrl_init(&ctrl, fd, mm_size);
     if (!nvm_ok(status))
@@ -203,6 +223,7 @@ inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDev
 
 
 
+/// @brief 释放队列对的 GPU 和 CPU 描述，再销毁管理队列及控制器引用。
 inline Controller::~Controller()
 {
     cudaFree(d_qps);
@@ -231,6 +252,7 @@ inline void Controller::reserveQueues(uint16_t numSubmissionQueues)
 
 
 
+/// @brief 通过管理命令与控制器协商 I/O SQ 和 CQ 数量。
 inline void Controller::reserveQueues(uint16_t numSubs, uint16_t numCpls)
 {
     int status = nvm_admin_request_num_queues(aq_ref, &numSubs, &numCpls);

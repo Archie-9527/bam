@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief BaM 块级 I/O 微基准，在 CUDA kernel 中生成 NVMe 请求并统计吞吐。
+ */
 #include <cuda.h>
 #include <nvm_ctrl.h>
 #include <nvm_types.h>
@@ -134,6 +138,9 @@ __device__ void read_data(page_cache_t* pc, QueuePair* qp, const uint64_t starti
 }
 
 */
+/**
+ * @brief 每个 GPU 线程访问由线程索引决定的 LBA，并重复指定次数。
+ */
 __global__ __launch_bounds__(64,32)
 void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t req_size, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment) {
     //printf("in threads\n");
@@ -186,9 +193,17 @@ void sequential_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t 
 }
 
 #ifdef LATENCY_BREAKDOWN
+/**
+ * @brief 带 d_clks 参数的随机访问入口，按请求索引传入延迟采样槽。
+ */
 __global__ //__launch_bounds__(64,32)
 void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t n_blocks, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t max_lba, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment, ulonglong4* d_clks) {
 #else
+/**
+ * @brief 各 GPU 线程生成一个随机起始 LBA 并在请求循环中复用。
+ * @details 每个 warp 的 lane 0 选择一个控制器和队列，再广播给其他 lane。
+ * 读测试由各线程调用 read_data，直接以线程索引选择接收数据的缓存槽。
+ */
 __global__ //__launch_bounds__(64,32)
 void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t n_blocks, uint32_t n_reqs, unsigned long long* req_count, uint32_t num_ctrls, uint64_t max_lba, uint64_t reqs_per_thread, uint32_t access_type, uint8_t* access_type_assignment) {
 #endif
@@ -253,6 +268,12 @@ void random_access_kernel(Controller** ctrls, page_cache_d_t* pc,  uint32_t n_bl
 }
 
 
+/**
+ * @brief 创建控制器和 GPU 数据区，运行块级 I/O kernel 并统计吞吐。
+ * @param argc 参数数量。
+ * @param argv 命令行参数，包含线程数、队列配置和访问模式。
+ * @return 成功时返回 0。
+ */
 int main(int argc, char** argv) {
 
     Settings settings;
@@ -360,7 +381,7 @@ int main(int argc, char** argv) {
 
         //std::cout << "finished creating range\n";
 
-        uint32_t nlb = page_size >> ctrls[0]->blk_size_log;
+        uint32_t nlb = page_size >> ctrls[0]->blk_size_log; /**< 每条主请求的逻辑块数，由 benchmark 页大小和 namespace 块长换算。 */
         uint64_t max_lba = ((n_blocks * page_size) >> ctrls[0]->blk_size_log) - 1;
 
         unsigned long long* d_req_count;
@@ -415,7 +436,7 @@ int main(int argc, char** argv) {
         }
 
         double elapsed = after - before;
-        uint64_t ios = g_size*b_size*settings.numReqs;
+        uint64_t ios = g_size*b_size*settings.numReqs; /**< 主请求循环数，额外 READ 由 GPU 端独立计数。 */
         uint64_t data = ios*page_size;
         double iops = ((double)ios)/(elapsed/1000000);
         double bandwidth = (((double)data)/(elapsed/1000000))/(1024ULL*1024ULL*1024ULL);

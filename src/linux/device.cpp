@@ -2,6 +2,10 @@
 #error "Must compile for Linux"
 #endif
 
+/**
+ * @file
+ * @brief 从用户态打开 libnvm 控制器、映射 BAR，并通过 ioctl 取得 DMA 地址。
+ */
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_ctrl.h>
@@ -48,6 +52,13 @@ static void release_device(struct device* dev, volatile void* mm_ptr, size_t mm_
 
 /*
  * Call kernel module ioctl and map memory for DMA.
+ */
+/**
+ * @brief 请求 libnvm 建立内存映射并返回逐页 DMA 地址。
+ * @param dev 打开的 libnvm 字符设备。
+ * @param va 待映射的虚拟地址范围及类型。
+ * @param[out] ioaddrs 接收设备可用的页地址。
+ * @return 成功返回 0，失败返回错误。
  */
 static int ioctl_map(const struct device* dev, const struct va_range* va, uint64_t* ioaddrs)
 {
@@ -108,6 +119,7 @@ static void ioctl_unmap(const struct device* dev, const struct va_range* va)
 
 
 
+/// @brief 从字符设备建立控制器句柄，并映射所需的 BAR 寄存器范围。
 int nvm_ctrl_init(nvm_ctrl_t** ctrl, int filedes, size_t mm_size)
 {
     int err;

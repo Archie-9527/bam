@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief NVMe 控制器句柄、BAR 访问及复位接口。
+ */
 #ifndef __NVM_CTRL_H__
 #define __NVM_CTRL_H__
 // #ifndef __CUDACC__

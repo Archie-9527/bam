@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief 内核侧 DMA 映射描述、查找和释放接口。
+ */
 #ifndef __LIBNVM_HELPER_MAP_H__
 #define __LIBNVM_HELPER_MAP_H__
 

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 的控制器、DMA 映射、队列和 NVMe 命令格式。
+ */
 #ifndef __NVM_TYPES_H__
 #define __NVM_TYPES_H__
 // #ifndef __CUDACC__
@@ -22,6 +26,7 @@
  * Note: This structure will be allocated by the API and needs to be
  *       released by the API.
  */
+/// @brief libnvm 维护的控制器句柄，包含 BAR 映射和设备能力。
 typedef struct
 {
     size_t                  page_size;      // Memory page size used by the controller (MPS)
@@ -68,13 +73,16 @@ typedef struct nvm_admin_reference* nvm_aq_ref;
  * Note: This structure will be allocated by the API and needs to be released
  *       by the API.
  */
+/// @brief 一段连续虚拟内存及其逐页设备 DMA 地址，映射由 libnvm 管理。
 typedef struct
 {
+    /// 起始虚拟地址，GPU 队列及数据缓冲区用它在 GPU 内访问。
     void*                   vaddr;          // Virtual address to start of region (NB! can be NULL)
     int8_t                  local;          // Is this local memory
     int8_t                  contiguous;     // Is memory contiguous
     size_t                  page_size;      // Controller's page size (MPS)
     size_t                  n_ioaddrs;      // Number of MPS-sized pages
+    /// 控制器可用的逐页 DMA 地址，供 Create Queue 或 PRP 使用。
     uint64_t                ioaddrs[];      // Physical/IO addresses of the memory pages
 }  nvm_dma_t;
 
@@ -121,15 +129,16 @@ typedef struct __align__(32)
  *
  * Note: This descriptor represents both completion and submission queues.
  */
+/// @brief GPU 和 CPU 共同使用的 SQ/CQ 描述，含环形指针、并发元数据和硬件地址。
 typedef struct
 {
     cuda::atomic<uint32_t, cuda::thread_scope_device> head_lock;
     uint8_t pad0[28];
     cuda::atomic<uint32_t, cuda::thread_scope_device> tail_lock;
     uint8_t pad1[28];
-    cuda::atomic<uint32_t, cuda::thread_scope_device> head;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> head; /**< 逻辑队首。SQ 通过 CQE 的 SQ head 推进，CQ 由 GPU 回收完成时推进。 */
     uint8_t pad2[28];
-    cuda::atomic<uint32_t, cuda::thread_scope_device> tail;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> tail; /**< SQ 的已发布逻辑尾位置，CQ 侧还用该字段累计完成处理。 */
     uint8_t pad3[28];
     cuda::atomic<uint32_t, cuda::thread_scope_system> tail_copy;
     uint8_t pad4[28];
@@ -138,15 +147,15 @@ typedef struct
 
     /* padded_struct<cuda::atomic<uint32_t, cuda::thread_scope_system>> head; */
     /* padded_struct<cuda::atomic<uint32_t, cuda::thread_scope_system>> tail; */
-    cuda::atomic<uint32_t, cuda::thread_scope_device> in_ticket;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> in_ticket; /**< 为并发提交者分配单调递增的 SQ 预约号。 */
     uint8_t pad6[28];
-    cuda::atomic<uint32_t, cuda::thread_scope_device> cid_ticket;
+    cuda::atomic<uint32_t, cuda::thread_scope_device> cid_ticket; /**< 分配待尝试占用的 16 位 CID。 */
     //uint8_t pad7[28];
-    padded_struct* tickets;
+    padded_struct* tickets; /**< 每个 SQ 槽当前允许写入的轮次。 */
 
-    padded_struct* head_mark;
-    padded_struct* tail_mark;
-    padded_struct* cid;
+    padded_struct* head_mark; /**< 各 CQ 槽的消费标记，供推进连续队首。 */
+    padded_struct* tail_mark; /**< 各 SQ 槽的就绪标记，供发布连续区间。 */
+    padded_struct* cid; /**< 每个 CID 的占用状态。 */
     padded_struct* pos_locks;
 
     uint16_t* clean_cid;
@@ -160,8 +169,11 @@ typedef struct
     int8_t                  phase;          // Current phase tag
     int8_t                  local;          // Is the queue allocated in local memory
     uint32_t                last;           // Used internally to check db writes
+    /// 映射后的 doorbell 地址，SQ 写尾位置，CQ 写头位置。
     volatile uint32_t*      db;             // Pointer to doorbell register (NB! write only)
+    /// 队列条目的虚拟地址，I/O 热路径由 GPU 访问。
     volatile void*          vaddr;          // Virtual address to start of queue memory
+    /// 队列起点的 DMA 地址，用于设备访问。
     uint64_t                ioaddr;         // Physical/IO address to start of queue memory
 } nvm_queue_t;
 
@@ -183,6 +195,7 @@ typedef struct __align__(32)
 /* 
  * NVM completion queue entry type (16 bytes) 
  */
+/// @brief 16 字节 NVMe 完成队列项，包含 SQ head、CID、状态与阶段位。
 typedef struct __align__(16) 
 {
     volatile uint32_t                dword[4];       // The name DWORD is chosen to reflect the specification
@@ -193,6 +206,7 @@ typedef struct __align__(16)
 /* 
  * NVM command queue entry type (64 bytes) 
  */
+/// @brief 64 字节 NVMe 提交队列项。
 typedef struct __align__(64) 
 {
     uint32_t                dword[16];

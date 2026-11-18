@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 的 DMA 映射接口，覆盖主机内存和 GPU 设备内存。
+ */
 #ifndef __NVM_DMA_H__
 #define __NVM_DMA_H__
 // #ifndef __CUDACC__

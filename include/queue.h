@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief GPU I/O 队列对、队列内存和并发提交与回收所需的元数据。
+ */
 #ifndef __BENCHMARK_QUEUEPAIR_H__
 #define __BENCHMARK_QUEUEPAIR_H__
 // #ifndef __CUDACC__
@@ -24,27 +28,28 @@ using error = std::runtime_error;
 using std::string;
 
 
+/// @brief 一个 NVMe I/O SQ/CQ 对及其 GPU 队列内存所有者。
 struct QueuePair
 {
     uint32_t            pageSize;
     uint32_t            block_size;
     uint32_t            block_size_log;
     uint32_t            block_size_minus_1;
-    uint32_t            nvmNamespace;
+    uint32_t            nvmNamespace; /**< 对该队列发送命令时使用的 namespace ID。 */
     //void*               prpList;
     //uint64_t*           prpListIoAddrs;
-    nvm_queue_t         sq;
-    nvm_queue_t         cq;
+    nvm_queue_t         sq; /**< GPU 写入命令的提交环。 */
+    nvm_queue_t         cq; /**< GPU 轮询完成项的完成环。 */
     uint16_t            qp_id;
-    DmaPtr              sq_mem;
-    DmaPtr              cq_mem;
+    DmaPtr              sq_mem; /**< 提交环的 GPU 存储及 DMA 映射。 */
+    DmaPtr              cq_mem; /**< 完成环的 GPU 存储及 DMA 映射。 */
     DmaPtr              prp_mem;
-    BufferPtr           sq_tickets;
+    BufferPtr           sq_tickets; /**< GPU 端每个 SQ 槽的可用轮次。 */
     //BufferPtr           sq_head_mark;
-    BufferPtr           sq_tail_mark;
+    BufferPtr           sq_tail_mark; /**< 已填 SQ 槽的发布标记。 */
     BufferPtr           sq_cid;
     //BufferPtr           cq_tickets;
-    BufferPtr           cq_head_mark;
+    BufferPtr           cq_head_mark; /**< 已消费 CQ 槽的标记。 */
     //BufferPtr           cq_tail_mark;
     BufferPtr           cq_pos_locks;
     //BufferPtr           cq_clean_cid;
@@ -55,6 +60,7 @@ struct QueuePair
 #define MAX_SQ_ENTRIES_64K  (64*1024/64)
 #define MAX_CQ_ENTRIES_64K  (64*1024/16)
 
+    /// @brief 为 GPU 并发操作分配 SQ ticket、CID 标记和 CQ 消费元数据。
     inline void init_gpu_specific_struct( const uint32_t cudaDevice) {
         this->sq_tickets = createBuffer(this->sq.qs * sizeof(padded_struct), cudaDevice);
         //this->sq_head_mark = createBuffer(this->sq.qs * sizeof(padded_struct), cudaDevice);
@@ -86,6 +92,16 @@ struct QueuePair
 
 
 
+    /**
+     * @brief 以 GPU 内存创建一对 I/O CQ 和 SQ，并获得 GPU 可写的 doorbell 地址。
+     * @param ctrl libnvm 控制器句柄。
+     * @param cudaDevice I/O 队列所在 GPU 的设备编号。
+     * @param ns namespace 的标识和逻辑块大小等属性。
+     * @param info 控制器能力信息。
+     * @param aq_ref 提交 Create I/O CQ 和 Create I/O SQ 管理命令的引用。
+     * @param qp_id 从 1 开始的 I/O 队列对 ID。
+     * @param queueDepth 请求深度上限，还会受控制器能力限制。
+     */
     inline QueuePair( const nvm_ctrl_t* ctrl, const uint32_t cudaDevice, const struct nvm_ns_info ns, const struct nvm_ctrl_info info, nvm_aq_ref& aq_ref, const uint16_t qp_id, const uint64_t queueDepth)
     {
         //this->this = (QueuePairThis*) malloc(sizeof(QueuePairThis));

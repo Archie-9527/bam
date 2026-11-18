@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 内核模块的 PCI 绑定、字符设备、BAR 映射及 DMA ioctl。
+ */
 #include "ioctl.h"
 #include "list.h"
 #include "ctrl.h"
@@ -64,6 +68,12 @@ MODULE_PARM_DESC(max_num_ctrls, "Number of controller devices");
 static int curr_ctrls = 0;
 
 
+/**
+ * @brief 将已绑定控制器的 BAR0 映射到用户进程。
+ * @param file 打开的 libnvm 字符设备。
+ * @param[in,out] vma 用户态申请的虚拟映射范围。
+ * @return 成功返回 0，失败返回负错误码。
+ */
 static int mmap_registers(struct file* file, struct vm_area_struct* vma)
 {
     struct ctrl* ctrl = NULL;
@@ -87,6 +97,7 @@ static int mmap_registers(struct file* file, struct vm_area_struct* vma)
 
 
 
+/// @brief 处理主机或 GPU 内存映射请求，将设备 DMA 地址复制回用户态。
 static long map_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 {
     long retval = 0;
@@ -196,6 +207,7 @@ static const struct file_operations dev_fops =
 };
 
 
+/// @brief 绑定一个 NVMe 控制器并为其创建设备节点，随后启用 PCI bus mastering。
 static int add_pci_dev(struct pci_dev* dev, const struct pci_device_id* id)
 {
     int err;

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief BaM 主机和 GPU 缓冲区分配，以及受生命周期管理的 DMA 映射。
+ */
 #ifndef __BENCHMARK_BUFFER_H__
 #define __BENCHMARK_BUFFER_H__
 
@@ -146,6 +150,12 @@ static void getDeviceMemory2(int device, void*& bufferPtr, size_t size)
 
 
 
+/**
+ * @brief 分配主机内存并建立供控制器访问的 DMA 映射。
+ * @param ctrl libnvm 控制器句柄。
+ * @param size 申请的字节数。
+ * @return 管理该内存及其 DMA 映射的智能指针。
+ */
 inline DmaPtr createDma(const nvm_ctrl_t* ctrl, size_t size)
 {
     nvm_dma_t* dma = nullptr;
@@ -181,6 +191,13 @@ inline DmaPtr createDma(const nvm_ctrl_t* ctrl, size_t size)
 
 
 
+/**
+ * @brief 分配并对齐 GPU 内存，经 libnvm 建立设备 DMA 映射。
+ * @param ctrl libnvm 控制器句柄。
+ * @param size 申请的字节数。
+ * @param cudaDevice GPU 编号，为负时走主机内存路径。
+ * @return 管理内存和 DMA 映射的智能指针，其中 vaddr 与 ioaddrs 分别供计算和设备访问。
+ */
 inline DmaPtr createDma(const nvm_ctrl_t* ctrl, size_t size, int cudaDevice)
 {
     if (cudaDevice < 0)

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief CPU 端管理队列引用的创建、销毁及控制器查询接口。
+ */
 #ifndef __NVM_AQ_H__
 #define __NVM_AQ_H__
 // #ifndef __CUDACC__

@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 控制器句柄及通过 BAR 寄存器配置控制器复位的实现。
+ */
 #include <nvm_types.h>
 #include <nvm_ctrl.h>
 #include <nvm_util.h>
@@ -205,6 +209,13 @@ int _nvm_ctrl_init(nvm_ctrl_t** handle, struct device* dev, const struct device_
  * Reset the controller manually.
  * We deliberately use the pointers from the user-handle, in case the user
  * overrides them somehow.
+ */
+/**
+ * @brief 停用控制器，写入管理队列配置，再启用并等待就绪。
+ * @param ctrl 提供 BAR 寄存器访问的控制器句柄。
+ * @param acq_addr 管理 CQ 的设备 DMA 地址。
+ * @param asq_addr 管理 SQ 的设备 DMA 地址。
+ * @return 成功返回 0，失败返回错误。
  */
 int nvm_raw_ctrl_reset(const nvm_ctrl_t* ctrl, uint64_t acq_addr, uint64_t asq_addr)
 {

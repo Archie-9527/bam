@@ -1,4 +1,8 @@
 #ifdef _SISCI
+/**
+ * @file
+ * @brief CPU 侧 NVMe 管理队列的创建、命令提交与回收。
+ */
 #include <sisci_api.h>
 #include <sisci_types.h>
 #include <sisci_error.h>
@@ -34,6 +38,7 @@
 /*
  * Local admin queue-pair descriptor.
  */
+/// @brief 控制器上由本进程操作的管理 SQ/CQ 和锁。
 struct local_admin
 {
     nvm_dma_t*          qmem;       // Queue memory
@@ -268,6 +273,7 @@ void _nvm_ref_put(nvm_aq_ref ref)
  * Execute an NVM admin command.
  * Lock must be held when calling this function.
  */
+/// @brief 向本进程的管理 SQ 提交一条命令，并同步读取管理 CQ。
 static int execute_command(struct local_admin* admin, const nvm_cmd_t* cmd, nvm_cpl_t* cpl)
 {
     nvm_cmd_t local_copy;
@@ -458,6 +464,7 @@ int _nvm_rpc_bind(nvm_aq_ref ref, void* data, rpc_free_binding_t release, rpc_st
 /*
  * Create admin queues locally.
  */
+/// @brief 建立管理队列引用，并使用给定内存窗口初始化控制器的 Admin Queue。
 int nvm_aq_create(nvm_aq_ref* handle, const nvm_ctrl_t* ctrl, const nvm_dma_t* window)
 {
     int err;

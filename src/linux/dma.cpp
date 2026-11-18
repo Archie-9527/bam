@@ -8,6 +8,10 @@
 #endif
 #endif
 
+/**
+ * @file
+ * @brief Linux libnvm 路径的主机与 GPU DMA 映射描述符。
+ */
 #include <nvm_types.h>
 #include <nvm_util.h>
 #include <nvm_dma.h>
@@ -150,6 +154,14 @@ int nvm_dma_map_host(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, void* vaddr, si
 
 
 #ifdef _CUDA
+/**
+ * @brief 以 CUDA 设备虚拟地址建立控制器可用的 DMA 映射。
+ * @param[out] handle 映射句柄输出。
+ * @param ctrl libnvm 控制器句柄。
+ * @param devptr 待映射的 GPU 虚拟地址。
+ * @param size 要映射的字节数。
+ * @return 成功返回 0，失败返回错误。
+ */
 int nvm_dma_map_device(nvm_dma_t** handle, const nvm_ctrl_t* ctrl, void* devptr, size_t size)
 {
     struct ioctl_mapping* md;

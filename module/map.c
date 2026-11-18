@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 的主机页与 NVIDIA GPU 页 DMA 映射及释放。
+ */
 #include "map.h"
 #include "list.h"
 #include "ctrl.h"
@@ -14,6 +18,7 @@
 #ifdef _CUDA
 #include <nv-p2p.h>
 
+/// @brief GPU 页表以及针对各 PCI 控制器建立的 DMA 映射。
 struct gpu_region
 {
     nvidia_p2p_page_table_t* pages;
@@ -314,6 +319,13 @@ void release_gpu_memory(struct map* map)
 
 
 #ifdef _CUDA
+/**
+ * @brief 向 NVIDIA 驱动取得 GPU 页表，并为列表内控制器建立 P2P DMA 映射。
+ * @param[in,out] map 待填充的 GPU 内存映射描述符。
+ * @param list 需要 DMA 映射的控制器列表。
+ * @return 成功返回 0，失败返回错误。
+ * @note 导出到 map->addrs 的是列表中第一个控制器的 DMA 地址。
+ */
 int map_gpu_memory(struct map* map, struct list* list)
 {
     unsigned long i;
@@ -411,6 +423,7 @@ int map_gpu_memory(struct map* map, struct list* list)
 
 
 #ifdef _CUDA
+/// @brief 查找或建立 GPU 内存映射，并登记到 libnvm 的设备内存映射列表。
 struct map* map_device_memory(struct list* list, const struct ctrl* ctrl, u64 vaddr, unsigned long n_pages, struct list* ctrl_list)
 {
     int err;

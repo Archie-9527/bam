@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief GPU 页缓存、逻辑页到缓存槽的映射，以及从 GPU 发起 NVMe I/O 的实现。
+ */
 #ifndef __PAGE_CACHE_H__
 #define __PAGE_CACHE_H__
 
@@ -93,10 +97,12 @@ struct range_d_t;
 
   };
 */
+/// @brief 每个逻辑页的缓存状态、引用计数和当前槽位。
 typedef struct __align__(32) {
+    /// 打包的 VALID、BUSY、DIRTY 标志与引用计数。
     cuda::atomic<uint32_t, cuda::thread_scope_device>  state; //state
                                                               //
-    uint32_t offset;
+    uint32_t offset; /**< 当前逻辑页对应的 GPU 缓存槽编号。 */
     //uint8_t pad[32-4-4];
 
 } __attribute__((aligned (32))) data_page_t;
@@ -491,10 +497,12 @@ struct bam_ptr {
     }
 };
 
+/// @brief 一个 GPU 缓存槽的占用状态及反向逻辑页映射。
 typedef struct __align__(32) {
+    /// 槽位分配和替换时使用的 FREE、UNLOCKED、LOCKED 状态。
     cuda::atomic<uint32_t, cuda::thread_scope_device>  page_take_lock; //state
     //
-    uint64_t page_translation;
+    uint64_t page_translation; /**< 编码后的 range ID 和逻辑页号，用于回收时找到原页。 */
     uint8_t pad[32-8];
 
 } __attribute__((aligned (32))) cache_page_t;
@@ -505,19 +513,22 @@ typedef struct __align__(32) {
   uint8_t   range_id;
   };
 */
+/// @brief GPU 可访问的页缓存视图，包含数据区、PRP 表、逻辑页范围与控制器引用。
 struct page_cache_d_t {
-    uint8_t* base_addr;
-    uint64_t page_size;
+    uint8_t* base_addr; /**< 缓存数据区的 GPU 虚拟基地址。 */
+    uint64_t page_size; /**< 单个 BaM 缓存槽的字节数。 */
     uint64_t page_size_minus_1;
     uint64_t page_size_log;
     uint64_t n_pages;
     uint64_t n_pages_minus_1;
-    cache_page_t* cache_pages;
+    cache_page_t* cache_pages; /**< 按槽位索引的缓存元数据。 */
     //uint32_t* page_translation;         //len = num of pages in cache
     //padded_struct_pc* page_translation;         //len = num of pages in cache
     //padded_struct_pc* page_take_lock;      //len = num of pages in cache
-    padded_struct_pc* page_ticket;
+    padded_struct_pc* page_ticket; /**< 轮转选择缓存槽的计数器。 */
+    /// 逐缓存槽的首个数据 DMA 地址。
     uint64_t* prp1;                  //len = num of pages in cache
+    /// 跨页数据的第二个 DMA 地址或 PRP 列表地址。
     uint64_t* prp2;                  //len = num of pages in cache if page_size = ctrl.page_size *2
     //uint64_t* prp_list;              //len = num of pages in cache if page_size > ctrl.page_size *2
     uint64_t    ctrl_page_size;
@@ -534,16 +545,16 @@ struct page_cache_d_t {
     data_dist_t* ranges_dists;
     cuda::atomic<uint64_t, cuda::thread_scope_device>* ctrl_counter;
 
-    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_head;
-    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_tail;
-    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_lock;
-    cuda::atomic<uint64_t, cuda::thread_scope_device>* extra_reads;
+    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_head; /**< 额外 READ 已经覆盖的协调进度。 */
+    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_tail; /**< 主 I/O 在额外 READ 协议中登记的进度。 */
+    cuda::atomic<uint64_t, cuda::thread_scope_device>* q_lock; /**< 协调额外 READ 的 GPU 互斥标记。 */
+    cuda::atomic<uint64_t, cuda::thread_scope_device>* extra_reads; /**< 实际发出的额外 READ 数量。 */
 
     Controller** d_ctrls;
     uint64_t n_ctrls;
-    bool prps;
+    bool prps; /**< 构建命令时是否需从 PRP2 表取值。 */
 
-    uint64_t n_blocks_per_page;
+    uint64_t n_blocks_per_page; /**< 一个缓存页包含的 namespace 逻辑块数。 */
 
     __forceinline__
     __device__
@@ -635,13 +646,14 @@ void __flush(page_cache_d_t* pc) {
     }
 }
 
+/// @brief CPU 侧页缓存所有者，负责分配数据区、PRP 表与 GPU 视图。
 struct page_cache_t {
 
 
     //void* d_pc;
 
     //BufferPtr prp2_list_buf;
-    page_cache_d_t pdt;
+    page_cache_d_t pdt; /**< CPU 维护并复制到 GPU 的页缓存描述。 */
     //void* d_pc;
     //BufferPtr prp2_list_buf;
     //bool prps;
@@ -650,7 +662,7 @@ struct page_cache_t {
     data_dist_t* h_ranges_dists;
     page_cache_d_t* d_pc_ptr;
 
-    DmaPtr pages_dma;
+    DmaPtr pages_dma; /**< 实际数据区所在的 GPU 内存与 DMA 映射。 */
     DmaPtr prp_list_dma;
     BufferPtr prp1_buf;
     BufferPtr prp2_buf;
@@ -701,6 +713,15 @@ struct page_cache_t {
 
     }
 
+    /**
+     * @brief 分配数据区及元数据，根据设备映射为各缓存槽生成 PRP。
+     * @param ps 每个缓存槽的字节数。
+     * @param np 缓存槽数。
+     * @param cudaDevice 缓存所在的 GPU 编号。
+     * @param ctrl 建立数据区 DMA 映射所用的控制器。
+     * @param max_range 支持登记的逻辑范围上限。
+     * @param ctrls 可从 GPU 访问的控制器列表。
+     */
     page_cache_t(const uint64_t ps, const uint64_t np, const uint32_t cudaDevice, const Controller& ctrl, const uint64_t max_range, const std::vector<Controller*>& ctrls) {
 
         ctrl_counter_buf = createBuffer(sizeof(cuda::atomic<uint64_t, cuda::thread_scope_device>), cudaDevice);
@@ -895,6 +916,10 @@ struct page_cache_t {
 
 
 
+/**
+ * @brief 逻辑元素范围在 GPU 端的描述，连接逻辑页、缓存槽和后备块。
+ * @tparam T 范围内的元素类型。
+ */
 template <typename T>
 struct range_d_t {
     uint64_t index_start;
@@ -968,6 +993,10 @@ struct range_d_t {
     void mark_page_dirty(const size_t index);
 };
 
+/**
+ * @brief CPU 侧逻辑范围所有者，初始化其 GPU 视图并登记到页缓存。
+ * @tparam T 范围内的元素类型。
+ */
 template <typename T>
 struct range_t {
     range_d_t<T> rdt;
@@ -1123,6 +1152,16 @@ void range_d_t<T>::mark_page_dirty(const size_t index) {
 }
 
 
+/**
+ * @brief 获取并引用一个逻辑页的缓存槽，缓存未命中时发起 NVMe READ 填页。
+ * @param pg 当前范围内的页编号。
+ * @param count 要增加的引用计数。
+ * @param write 是否为写访问，写访问会将缓存页标记为脏。
+ * @param ctrl_ 接口传入的控制器提示，此实现按页的后备分布选择控制器。
+ * @param queue 选定控制器上的 I/O 队列索引。
+ * @return 数据所在的 GPU 缓存槽编号。
+ * @details 命中时直接复用槽位。未命中时，由取得 BUSY 状态的线程找槽并填页。
+ */
 template <typename T>
 __forceinline__
 __device__
@@ -1233,6 +1272,10 @@ uint64_t range_d_t<T>::acquire_page(const size_t pg, const uint32_t count, const
 
 
 
+/**
+ * @brief GPU 数组访问接口，按元素索引查找范围和缓存页。
+ * @tparam T 数组元素类型。
+ */
 template<typename T>
 struct array_d_t {
     uint64_t n_elems;
@@ -1722,6 +1765,10 @@ struct array_d_t {
 
 };
 
+/**
+ * @brief CPU 侧 BaM 数组对象，为 CUDA 调用者准备数组的设备视图。
+ * @tparam T 数组元素类型。
+ */
 template<typename T>
 struct array_t {
     array_d_t<T> adt;
@@ -1788,6 +1835,13 @@ cache_page_t* page_cache_d_t::get_cache_page(const uint32_t page) const {
 
 
 
+/**
+ * @brief 为待载入的逻辑页选择槽位，必要时回写被替换的脏页。
+ * @param address 当前范围内的逻辑页编号。
+ * @param range_id 该页所属范围的 ID。
+ * @param queue_ 写回时用于选择 I/O 队列的索引。
+ * @return 成功分配给新页的缓存槽。
+ */
 __forceinline__
 __device__
 uint32_t page_cache_d_t::find_slot(uint64_t address, uint64_t range_id, const uint32_t queue_) {
@@ -1934,6 +1988,13 @@ uint32_t page_cache_d_t::find_slot(uint64_t address, uint64_t range_id, const ui
 }
 
 
+/**
+ * @brief 异步提交接口对应的完成回收入口。
+ * @param qp 发出命令的 I/O 队列对。
+ * @param cid 待回收的命令标识。
+ * @param sq_pos 提交槽号，当前实现未使用。
+ * @warning 当前实现调用 cq_poll 时未提供其输出指针，复用此入口前须处理这一调用约定。
+ */
 inline __device__ void poll_async(QueuePair* qp, uint16_t cid, uint16_t sq_pos) {
     uint32_t cq_pos = cq_poll(&qp->cq, cid);
     //sq_dequeue(&qp->sq, sq_pos);
@@ -1945,6 +2006,17 @@ inline __device__ void poll_async(QueuePair* qp, uint16_t cid, uint16_t sq_pos) 
     put_cid(&qp->sq, cid);
 }
 
+/**
+ * @brief 构造并提交 NVMe 命令，将 CID 和 SQ 槽交给调用方处理完成。
+ * @param pc GPU 页缓存视图，提供数据槽的 PRP。
+ * @param qp 使用的 I/O 队列对。
+ * @param starting_lba 起始逻辑块编号。
+ * @param n_blocks 实际逻辑块数。
+ * @param pc_entry 数据缓冲区的缓存槽编号。
+ * @param opcode NVMe 操作码。
+ * @param[out] cid 已占用的命令标识，须在回收后释放。
+ * @param[out] sq_pos 命令在提交环内的槽号。
+ */
 inline __device__ void access_data_async(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint8_t opcode, uint16_t * cid, uint16_t* sq_pos) {
     nvm_cmd_t cmd;
     *cid = get_cid(&(qp->sq));
@@ -1965,6 +2037,16 @@ inline __device__ void access_data_async(page_cache_d_t* pc, QueuePair* qp, cons
 
 }
 
+/**
+ * @brief 协调额外 READ，使一次补充读覆盖已登记的一组主 I/O。
+ * @param pc 保存共享协调进度的 GPU 页缓存视图。
+ * @param qp 发出额外命令的 I/O 队列对。
+ * @param starting_lba 补充读的起始 LBA，沿用主请求地址。
+ * @param[in,out] cmd 将块数改为单块后可再次提交的 READ。
+ * @param cid 主 READ 已完成但尚未归还的 CID。
+ * @param pc_pos 本调用在协调计数器中登记的位置。
+ * @param pc_prev_head 本调用登记时观察到的覆盖进度。
+ */
 inline __device__ void enqueue_second(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, nvm_cmd_t* cmd, const uint16_t cid, const uint64_t pc_pos, const uint64_t pc_prev_head) {
     nvm_cmd_rw_blks(cmd, starting_lba, 1);
     unsigned int ns = 8;
@@ -2013,6 +2095,14 @@ inline __device__ void enqueue_second(page_cache_d_t* pc, QueuePair* qp, const u
 
 }
 
+/**
+ * @brief GPU 提交 READ，等待 CQE，协调额外 READ 后归还 CID。
+ * @param pc 当前 GPU 页缓存视图，提供数据 PRP 和额外读协调状态。
+ * @param qp 已创建的 I/O 队列对。
+ * @param starting_lba 后备 namespace 中的起始 LBA。
+ * @param n_blocks 实际逻辑块数。
+ * @param pc_entry 接收所读数据的 GPU 缓存槽。
+ */
 inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
     //uint64_t rem_bytes = starting_byte & qp->block_size_minus_1;
@@ -2061,6 +2151,14 @@ inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64
 }
 
 
+/**
+ * @brief 从 GPU 缓存槽提交 NVMe WRITE，轮询并回收完成。
+ * @param pc GPU 页缓存视图，提供数据 PRP。
+ * @param qp 使用的 I/O 队列对。
+ * @param starting_lba 后备 namespace 中的起始 LBA。
+ * @param n_blocks 实际逻辑块数。
+ * @param pc_entry 提供写入数据的 GPU 缓存槽。
+ */
 inline __device__ void write_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
     //uint64_t rem_bytes = starting_byte & qp->block_size_minus_1;
@@ -2102,6 +2200,10 @@ inline __device__ void write_data(page_cache_d_t* pc, QueuePair* qp, const uint6
 
 }
 
+/**
+ * @brief 按指定的读写操作码构造命令并等待完成，用于混合访问路径。
+ * @warning 当前实现省略了 cq_poll 命中时写入的输出指针，复用前须核查该调用约定。
+ */
 inline __device__ void access_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint8_t opcode) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
     //uint64_t rem_bytes = starting_byte & qp->block_size_minus_1;

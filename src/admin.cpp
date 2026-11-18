@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief BaM 的 NVMe 管理命令编码与提交，包括 Identify、队列创建和队列数协商。
+ */
 #include <nvm_types.h>
 #include <nvm_admin.h>
 #include <nvm_cmd.h>
@@ -228,6 +232,7 @@ int nvm_admin_get_log_page(nvm_aq_ref ref, uint32_t ns_id, void* ptr, uint64_t i
 
 
 
+/// @brief 发送 Create I/O CQ 管理命令，并用 DMA 映射初始化本地 CQ 描述。
 int nvm_admin_cq_create(nvm_aq_ref ref, nvm_queue_t* cq, uint16_t id, const nvm_dma_t* dma, size_t offset, size_t qs, bool need_prp)
 {
     int err;
@@ -334,6 +339,7 @@ int nvm_admin_cq_delete(nvm_aq_ref ref, nvm_queue_t* cq)
 
 
 
+/// @brief 发送 Create I/O SQ 管理命令，将新 SQ 关联到已创建的 CQ。
 int nvm_admin_sq_create(nvm_aq_ref ref, nvm_queue_t* sq, const nvm_queue_t* cq, uint16_t id, const nvm_dma_t* dma, size_t offset, size_t qs, bool need_prp)
 {
     int err;
@@ -478,6 +484,7 @@ int nvm_admin_set_num_queues(nvm_aq_ref ref, uint16_t n_cqs, uint16_t n_sqs)
 
 
 
+/// @brief 与 NVMe 控制器协商所需的 I/O SQ 和 CQ 数量。
 int nvm_admin_request_num_queues(nvm_aq_ref ref, uint16_t* n_cqs, uint16_t* n_sqs)
 {
     nvm_cmd_t command;

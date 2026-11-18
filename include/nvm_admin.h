@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief libnvm 的管理命令 API，包括控制器识别和 I/O 队列管理。
+ */
 #ifndef __NVM_ADMIN_H__
 #define __NVM_ADMIN_H__
 // #ifndef __CUDACC__

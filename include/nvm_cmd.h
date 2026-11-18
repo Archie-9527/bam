@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief NVMe 命令操作码、SQE 字段编码和 PRP 列表辅助函数。
+ */
 #ifndef __NVM_COMMAND_H__
 #define __NVM_COMMAND_H__
 
@@ -51,6 +55,13 @@ enum nvm_admin_command_set
 /*
  * Set command's DWORD0 and DWORD1
  */
+/**
+ * @brief 编码 NVMe 命令头部的操作码、CID 和 NSID。
+ * @param[out] cmd 要填充的 SQE。
+ * @param cid 该命令在所属 SQ 上占用的标识。
+ * @param opcode NVMe 操作码。
+ * @param ns_id 目标 namespace 标识。
+ */
 __device__ __host__ static inline
 void nvm_cmd_header(nvm_cmd_t* cmd, uint16_t cid, uint8_t opcode, uint32_t ns_id)
 {
@@ -62,6 +73,12 @@ void nvm_cmd_header(nvm_cmd_t* cmd, uint16_t cid, uint8_t opcode, uint32_t ns_id
 
 /*
  * Set command's DPTR field (DWORD6-9)
+ */
+/**
+ * @brief 将 PRP1 和 PRP2 拆分到 SQE 的 DWORD 6 到 9。
+ * @param[in,out] cmd 要填充的数据指针字段所在的命令。
+ * @param prp1 首个数据地址。
+ * @param prp2 第二段数据地址或 PRP 列表地址，无需使用时为 0。
  */
 __device__ __host__ static inline
 void nvm_cmd_data_ptr(nvm_cmd_t* cmd, uint64_t prp1, uint64_t prp2)
@@ -78,6 +95,12 @@ void nvm_cmd_data_ptr(nvm_cmd_t* cmd, uint64_t prp1, uint64_t prp2)
 
 /*
  * Set command's block fields (DWORD10-12)
+ */
+/**
+ * @brief 将起始 LBA 和零基逻辑块数写入读写命令。
+ * @param[in,out] cmd 要填充的命令。
+ * @param start_lba 首个逻辑块编号。
+ * @param n_blks 实际逻辑块数，编码时减一。
  */
 __device__ __host__ static inline
 void nvm_cmd_rw_blks(nvm_cmd_t* cmd, uint64_t start_lba, uint16_t n_blks)

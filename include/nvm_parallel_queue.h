@@ -1,3 +1,7 @@
+/**
+ * @file
+ * @brief GPU 线程共享 NVMe SQ/CQ 时的预约、发布、轮询与回收。
+ */
 #ifndef __NVM_PARALLEL_QUEUE_H_
 #define __NVM_PARALLEL_QUEUE_H_
 
@@ -33,6 +37,11 @@ __forceinline__ __device__ uint64_t get_id(uint64_t x, uint64_t y) {
 
 
 
+/**
+ * @brief 为一条在途命令申请尚未占用的 CID。
+ * @param[in,out] sq 该命令所属的提交队列。
+ * @return 该 SQ 上成功占用的命令标识。
+ */
 inline __device__
 uint16_t get_cid(nvm_queue_t* sq) {
     bool not_found = true;
@@ -52,11 +61,22 @@ uint16_t get_cid(nvm_queue_t* sq) {
 
 }
 
+/**
+ * @brief 释放已完成命令的 CID，允许其他 GPU 线程复用。
+ * @param[in,out] sq 该命令所属的提交队列。
+ * @param id 待归还的 CID。
+ */
 inline __device__
 void put_cid(nvm_queue_t* sq, uint16_t id) {
     sq->cid[id].val.store(UNLOCKED, cuda::std::memory_order_release);
 }
 
+/**
+ * @brief 从 SQ 尾位置统计连续就绪、可一次发布的槽位。
+ * @param[in,out] q 提交环。
+ * @param cur_tail 当前发布边界。
+ * @return 本次可以推进的槽数。
+ */
 inline __device__
 uint32_t move_tail(nvm_queue_t* q, uint32_t cur_tail) {
     uint32_t count = 0;
@@ -80,6 +100,13 @@ uint32_t move_tail(nvm_queue_t* q, uint32_t cur_tail) {
     return (count);
 }
 
+/**
+ * @brief 汇总 CQ 队首连续已消费的槽，并用最新的 SQ head 信息回收 SQ 槽。
+ * @param[in,out] q 完成环。
+ * @param cur_head 当前消费边界。
+ * @param[in,out] sq 与该 CQ 配对的提交环。
+ * @return 本次可以推进的 CQ 槽数。
+ */
 inline __device__
 uint32_t move_head_cq(nvm_queue_t* q, uint32_t cur_head, nvm_queue_t* sq) {
     uint32_t count = 0;
@@ -165,6 +192,15 @@ uint32_t move_head_sq(nvm_queue_t* q, uint32_t cur_head) {
 
 typedef ulonglong4 copy_type;
 
+/**
+ * @brief 用 ticket 预约 SQ 槽，写入命令并协作发布连续的就绪区间。
+ * @param[in,out] sq 目的提交队列。
+ * @param cmd 待写入的 NVMe SQE。
+ * @param pc_tail 可选的额外 READ 协调计数器。
+ * @param[out] cur_pc_tail 提供 pc_tail 时，用于记录所观察到的计数。
+ * @return 该命令在 SQ 中的环内槽号。
+ * @details 写好命令后设置 tail_mark。持有 tail_lock 的线程推进连续就绪的区间，并通过 MMIO 写 SQ doorbell。
+ */
 inline __device__
 uint16_t sq_enqueue(nvm_queue_t* sq, nvm_cmd_t* cmd, cuda::atomic<uint64_t, cuda::thread_scope_device>* pc_tail =NULL, uint64_t * cur_pc_tail=NULL) {
 
@@ -376,6 +412,15 @@ void sq_dequeue(nvm_queue_t* sq, uint16_t pos) {
 
 }
 
+/**
+ * @brief 自当前 CQ head 起轮询，匹配待等候的 CID 和所处轮次的 phase。
+ * @param cq 待轮询的完成环。
+ * @param search_cid 目标命令标识。
+ * @param[out] loc_ 匹配 CQE 的逻辑位置，包含环回轮次。
+ * @param[out] cq_head 此次匹配时观察到的 CQ head。
+ * @return 匹配 CQE 的环内槽号。
+ * @warning 命中时会写入两个输出参数，调用者须传有效指针。当前轮询没有请求超时退出。
+ */
 inline __device__
 uint32_t cq_poll(nvm_queue_t* cq, uint16_t search_cid, uint32_t* loc_ = NULL, uint32_t* cq_head = NULL) {
     uint64_t j = 0;
@@ -422,6 +467,14 @@ uint32_t cq_poll(nvm_queue_t* cq, uint16_t search_cid, uint32_t* loc_ = NULL, ui
     }
 }
 
+/**
+ * @brief 标记一个 CQE 已消费，合并推进 CQ head 并用 MMIO 归还 CQ 空间。
+ * @param[in,out] cq 目标完成环。
+ * @param pos 已消费 CQE 的环内槽号。
+ * @param[in,out] sq 用 CQE 的 SQ head 信息更新的提交队列。
+ * @param loc_ cq_poll 返回的完成项逻辑位置。
+ * @param cur_head_ cq_poll 匹配时观察到的 CQ head。
+ */
 inline __device__
 void cq_dequeue(nvm_queue_t* cq, uint16_t pos, nvm_queue_t* sq, uint32_t loc_ = 0, uint32_t cur_head_ = 0) {
     cq->tail.fetch_add(1, cuda::std::memory_order_acq_rel);
