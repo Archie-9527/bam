@@ -37,6 +37,21 @@ __forceinline__ __device__ uint64_t get_id(uint64_t x, uint64_t y) {
 
 
 
+/// @brief 块级测试等待进度时，发现 SwarmIO 已停止并排空后结束当前 GPU 线程。
+inline __device__ void check_swarmio_fault(const nvm_queue_t* q, uint32_t& spins)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    if (q->controller_status && (++spins & 255) == 0) {
+        uint32_t status;
+        asm volatile("ld.mmio.relaxed.sys.global.u32 %0, [%1];"
+                     : "=r"(status) : "l"(q->controller_status) : "memory");
+        // With this opt-in, RDY=0 means SwarmIO has confirmed the drain.
+        if (!(status & 1u))
+            asm volatile("exit;" ::: "memory");
+    }
+#endif
+}
+
 /**
  * @brief 为一条在途命令申请尚未占用的 CID。
  * @param[in,out] sq 该命令所属的提交队列。
@@ -46,12 +61,15 @@ inline __device__
 uint16_t get_cid(nvm_queue_t* sq) {
     bool not_found = true;
     uint16_t id;
+    uint32_t spins = 0;
 
     do {
         id = sq->cid_ticket.fetch_add(1, cuda::std::memory_order_relaxed) & (65535);
         //printf("in thread: %p\n", (void*) ((sq->cid)+id));
         uint64_t old = sq->cid[id].val.fetch_or(LOCKED, cuda::std::memory_order_acquire);
         not_found = old == LOCKED;
+        if (not_found)
+            check_swarmio_fault(sq, spins);
         //if (not_found)
         //       printf("still looking\n");
     } while (not_found);
@@ -222,7 +240,9 @@ uint16_t sq_enqueue(nvm_queue_t* sq, nvm_cmd_t* cmd, cuda::atomic<uint64_t, cuda
 
     //uint64_t k = 0;
     unsigned int ns = 8;
+    uint32_t spins = 0;
     while ((sq->tickets[pos].val.load(cuda::std::memory_order_relaxed) != id) ) {
+        check_swarmio_fault(sq, spins);
         /*if (k++ % 100 == 0)   {
             printf("tid: %llu\tpos: %llu\tticket: %llu\tid: %llu\ttickets_pos: %llu\tqueue_head: %llu\tqueue_tail: %llu\n",
                    (unsigned long long) threadIdx.x, (unsigned long long) pos,
@@ -239,6 +259,7 @@ uint16_t sq_enqueue(nvm_queue_t* sq, nvm_cmd_t* cmd, cuda::atomic<uint64_t, cuda
 
     ns = 8;
     while ((sq->tickets[pos].val.load(cuda::std::memory_order_acquire) != id) ) {
+        check_swarmio_fault(sq, spins);
         /*if (k++ % 100 == 0)   {
             printf("tid: %llu\tpos: %llu\tticket: %llu\tid: %llu\ttickets_pos: %llu\tqueue_head: %llu\tqueue_tail: %llu\n",
                    (unsigned long long) threadIdx.x, (unsigned long long) pos,
@@ -322,6 +343,7 @@ uint16_t sq_enqueue(nvm_queue_t* sq, nvm_cmd_t* cmd, cuda::atomic<uint64_t, cuda
     ns = 8;
     cont = sq->tail_mark[pos].val.load(cuda::std::memory_order_relaxed) == LOCKED;
     while(cont) {
+        check_swarmio_fault(sq, spins);
         bool new_cont = sq->tail_lock.load(cuda::std::memory_order_relaxed) == LOCKED;
         if (!new_cont) {
             new_cont = sq->tail_lock.fetch_or(LOCKED, cuda::std::memory_order_acquire) == LOCKED;
@@ -424,10 +446,12 @@ void sq_dequeue(nvm_queue_t* sq, uint16_t pos) {
 inline __device__
 uint32_t cq_poll(nvm_queue_t* cq, uint16_t search_cid, uint32_t* loc_ = NULL, uint32_t* cq_head = NULL) {
     uint64_t j = 0;
+    uint32_t spins = 0;
     unsigned int ns = 8;
     //uint64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
     //printf("---tid: %llu\tcid: %llu\tcq_start: %llx\n", (unsigned long long) (threadIdx.x+blockIdx.x*blockDim.x), (unsigned long long) (search_cid), (uint64_t) cq->vaddr);
     while (true) {
+        check_swarmio_fault(cq, spins);
         uint32_t head = cq->head.load(cuda::std::memory_order_relaxed);
 
         for (size_t i = 0; i < cq->qs_minus_1; i++) {
@@ -449,8 +473,10 @@ uint32_t cq_poll(nvm_queue_t* cq, uint16_t search_cid, uint32_t* loc_ = NULL, ui
             if ((cid == search_cid) && (phase == search_phase)){
                  //if ((cpl_entry >> 17) != 0)
                  //     printf("NVM Error: %llx\tcid: %llu\n", (unsigned long long) (cpl_entry >> 17), (unsigned long long) search_cid);
-                *cq_head = head;
-                *loc_ = cur_head;
+                if (cq_head)
+                    *cq_head = head;
+                if (loc_)
+                    *loc_ = cur_head;
                 return loc;
             }
             if (phase != search_phase)
@@ -480,7 +506,9 @@ void cq_dequeue(nvm_queue_t* cq, uint16_t pos, nvm_queue_t* sq, uint32_t loc_ = 
     cq->tail.fetch_add(1, cuda::std::memory_order_acq_rel);
 
     unsigned int ns = 8;
+    uint32_t spins = 0;
     while ((cq->pos_locks[pos].val.load(cuda::std::memory_order_relaxed) != 0) ) {
+        check_swarmio_fault(cq, spins);
         /*if (k++ % 100 == 0)   {
             printf("tid: %llu\tpos: %llu\tticket: %llu\tid: %llu\ttickets_pos: %llu\tqueue_head: %llu\tqueue_tail: %llu\n",
                    (unsigned long long) threadIdx.x, (unsigned long long) pos,
@@ -497,6 +525,7 @@ void cq_dequeue(nvm_queue_t* cq, uint16_t pos, nvm_queue_t* sq, uint32_t loc_ = 
 
     ns = 8;
     while ((cq->pos_locks[pos].val.fetch_or(1, cuda::std::memory_order_acquire) != 0) ) {
+        check_swarmio_fault(cq, spins);
         /*if (k++ % 100 == 0)   {
             printf("tid: %llu\tpos: %llu\tticket: %llu\tid: %llu\ttickets_pos: %llu\tqueue_head: %llu\tqueue_tail: %llu\n",
                    (unsigned long long) threadIdx.x, (unsigned long long) pos,
@@ -519,6 +548,7 @@ void cq_dequeue(nvm_queue_t* cq, uint16_t pos, nvm_queue_t* sq, uint32_t loc_ = 
     ns = 8;
     cont = cq->head_mark[pos].val.load(cuda::std::memory_order_relaxed) == LOCKED;
     while (cont) {
+            check_swarmio_fault(cq, spins);
             bool new_cont = cq->head_lock.fetch_or(LOCKED, cuda::std::memory_order_acquire) == LOCKED;
             if (!new_cont) {
                 uint32_t cur_head = cq->head.load(cuda::std::memory_order_relaxed);;
@@ -560,6 +590,7 @@ void cq_dequeue(nvm_queue_t* cq, uint16_t pos, nvm_queue_t* sq, uint32_t loc_ = 
     ns = 8;
 //    uint32_t cur_head_mod = cur_head_ & (cq->qs_minus_1);
     do {
+        check_swarmio_fault(cq, spins);
         //      uint32_t new_head_mod = new_head & (cq->qs_minus_1);
 
         if (new_head > cur_head_) {

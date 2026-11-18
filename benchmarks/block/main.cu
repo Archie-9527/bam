@@ -16,6 +16,9 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <atomic>
+#include <csignal>
 #include <map>
 #include <fcntl.h>
 #include <unistd.h>
@@ -44,7 +47,22 @@
 using error = std::runtime_error;
 using std::string;
 
+static volatile std::sig_atomic_t stopRequested = 0;
 
+static void request_stop(int)
+{
+    stopRequested = 1;
+}
+
+static void stop_swarmio(const std::vector<Controller*>& ctrls)
+{
+    for (Controller* ctrl : ctrls) {
+        // Clear CC.EN to request a drain. Keep the BAR and GPU mappings live.
+        auto* bar = static_cast<volatile char*>(ctrl->ctrl->mm_ptr);
+        *reinterpret_cast<volatile uint32_t*>(bar + 0x14) &= ~1u;
+    }
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
 
 //uint32_t n_ctrls = 1;
 const char* const sam_ctrls_paths[] = {"/dev/libnvm0", "/dev/libnvm1", "/dev/libnvm2", "/dev/libnvm3", "/dev/libnvm4", "/dev/libnvm5", "/dev/libnvm6", "/dev/libnvm7", "/dev/libnvm8", "/dev/libnvm9"};
@@ -326,9 +344,13 @@ int main(int argc, char** argv) {
         //Controller ctrl(settings.controllerPath, settings.nvmNamespace, settings.cudaDevice);
         
         cuda_err_chk(cudaSetDevice(settings.cudaDevice));
+        const char* faultExit = std::getenv("BAM_SWARMIO_FAULT_EXIT");
+        const bool swarmioFaultExit = faultExit && std::strcmp(faultExit, "1") == 0;
         std::vector<Controller*> ctrls(settings.n_ctrls);
         for (size_t i = 0 ; i < settings.n_ctrls; i++)
-            ctrls[i] = new Controller(settings.ssdtype == 0 ? sam_ctrls_paths[i] : intel_ctrls_paths[i], settings.nvmNamespace, settings.cudaDevice, settings.queueDepth, settings.numQueues);
+            ctrls[i] = new Controller(settings.ssdtype == 0 ? sam_ctrls_paths[i] : intel_ctrls_paths[i],
+                                      settings.nvmNamespace, settings.cudaDevice, settings.queueDepth,
+                                      settings.numQueues, swarmioFaultExit);
 
         //auto dma = createDma(ctrl.ctrl, NVM_PAGE_ALIGN(64*1024*10, 1UL << 16), settings.cudaDevice, settings.adapter, settings.segmentId);
 
@@ -412,6 +434,10 @@ int main(int argc, char** argv) {
             cuda_err_chk(cudaMalloc(&d_clks, n_total_reqs * sizeof(ulonglong4)));
         }
 #endif
+        if (swarmioFaultExit) {
+            std::signal(SIGINT, request_stop);
+            std::signal(SIGTERM, request_stop);
+        }
         Event before;
         std::cout << "atlaunch kernel\n";
         if (settings.random)
@@ -429,7 +455,39 @@ int main(int argc, char** argv) {
         //uint8_t* ret_array = (uint8_t*) malloc(n_pages*page_size);
 
         //cuda_err_chk(cudaMemcpy(ret_array, h_pc.base_addr,page_size*n_pages, cudaMemcpyDeviceToHost));
-        cuda_err_chk(cudaDeviceSynchronize());
+        cudaError_t runStatus;
+        if (swarmioFaultExit) {
+            bool stopping = false;
+            do {
+                runStatus = cudaEventQuery(after.event);
+                const bool controllerFailed = std::any_of(ctrls.begin(), ctrls.end(), [](Controller* ctrl) {
+                    return (*ctrl->controller_status() & 3u) != 1u;
+                });
+                if (!stopping &&
+                    (stopRequested || controllerFailed ||
+                     (runStatus != cudaSuccess && runStatus != cudaErrorNotReady))) {
+                    std::cerr << "Stopping I/O. Waiting for SwarmIO to drain before releasing DMA mappings."
+                              << std::endl;
+                    stop_swarmio(ctrls);
+                    stopping = true;
+                }
+                if (runStatus == cudaErrorNotReady)
+                    usleep(1000);
+            } while (runStatus == cudaErrorNotReady);
+            if (stopping) {
+                for (Controller* ctrl : ctrls) {
+                    while (*ctrl->controller_status() & 1u)
+                        usleep(10000);
+                    delete ctrl;
+                }
+                if (runStatus != cudaSuccess)
+                    std::cerr << cudaGetErrorString(runStatus) << std::endl;
+                return EXIT_FAILURE;
+            }
+        } else {
+            runStatus = cudaDeviceSynchronize();
+        }
+        cuda_err_chk(runStatus);
         if (input_f != nullptr) {
             cuda_err_chk(cudaMemcpy(map_in, h_pc.pdt.base_addr,  std::min((uint64_t)sb_in.st_size, total_cache_size), cudaMemcpyDeviceToHost));
             munmap(map_in, sb_in.st_size);

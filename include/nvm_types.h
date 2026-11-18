@@ -171,6 +171,7 @@ typedef struct
     uint32_t                last;           // Used internally to check db writes
     /// 映射后的 doorbell 地址，SQ 写尾位置，CQ 写头位置。
     volatile uint32_t*      db;             // Pointer to doorbell register (NB! write only)
+    const volatile uint32_t* controller_status; /**< 可选的 SwarmIO CSTS 的 GPU 地址。 */
     /// 队列条目的虚拟地址，I/O 热路径由 GPU 访问。
     volatile void*          vaddr;          // Virtual address to start of queue memory
     /// 队列起点的 DMA 地址，用于设备访问。

@@ -1993,13 +1993,13 @@ uint32_t page_cache_d_t::find_slot(uint64_t address, uint64_t range_id, const ui
  * @param qp 发出命令的 I/O 队列对。
  * @param cid 待回收的命令标识。
  * @param sq_pos 提交槽号，当前实现未使用。
- * @warning 当前实现调用 cq_poll 时未提供其输出指针，复用此入口前须处理这一调用约定。
  */
 inline __device__ void poll_async(QueuePair* qp, uint16_t cid, uint16_t sq_pos) {
-    uint32_t cq_pos = cq_poll(&qp->cq, cid);
+    uint32_t loc, head;
+    uint32_t cq_pos = cq_poll(&qp->cq, cid, &loc, &head);
     //sq_dequeue(&qp->sq, sq_pos);
 
-    cq_dequeue(&qp->cq, cq_pos, &qp->sq);
+    cq_dequeue(&qp->cq, cq_pos, &qp->sq, loc, head);
 
 
 
@@ -2050,7 +2050,9 @@ inline __device__ void access_data_async(page_cache_d_t* pc, QueuePair* qp, cons
 inline __device__ void enqueue_second(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, nvm_cmd_t* cmd, const uint16_t cid, const uint64_t pc_pos, const uint64_t pc_prev_head) {
     nvm_cmd_rw_blks(cmd, starting_lba, 1);
     unsigned int ns = 8;
+    uint32_t spins = 0;
     do {
+        check_swarmio_fault(&qp->sq, spins);
         //check if new head past pc_pos
         //cur_pc_head == new head
         //prev_pc_head == old head
@@ -2202,7 +2204,6 @@ inline __device__ void write_data(page_cache_d_t* pc, QueuePair* qp, const uint6
 
 /**
  * @brief 按指定的读写操作码构造命令并等待完成，用于混合访问路径。
- * @warning 当前实现省略了 cq_poll 命中时写入的输出指针，复用前须核查该调用约定。
  */
 inline __device__ void access_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint8_t opcode) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
@@ -2228,8 +2229,9 @@ inline __device__ void access_data(page_cache_d_t* pc, QueuePair* qp, const uint
     nvm_cmd_rw_blks(&cmd, starting_lba, n_blocks);
     uint16_t sq_pos = sq_enqueue(&qp->sq, &cmd);
 
-    uint32_t cq_pos = cq_poll(&qp->cq, cid);
-    cq_dequeue(&qp->cq, cq_pos, &qp->sq);
+    uint32_t loc, head;
+    uint32_t cq_pos = cq_poll(&qp->cq, cid, &loc, &head);
+    cq_dequeue(&qp->cq, cq_pos, &qp->sq, loc, head);
     //sq_dequeue(&qp->sq, sq_pos);
 
 

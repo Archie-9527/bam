@@ -70,7 +70,15 @@ struct Controller
     Controller(uint64_t controllerId, uint32_t nvmNamespace, uint32_t adapter, uint32_t segmentId);
 #endif
 
-    Controller(const char* path, uint32_t nvmNamespace, uint32_t cudaDevice, uint64_t queueDepth, uint64_t numQueues);
+    Controller(const char* path, uint32_t nvmNamespace, uint32_t cudaDevice,
+               uint64_t queueDepth, uint64_t numQueues, bool swarmioFaultExit = false);
+
+    volatile uint32_t* controller_status() const
+    {
+        // CSTS is at offset 0x1c in the NVMe register block.
+        return reinterpret_cast<volatile uint32_t*>(
+            static_cast<volatile char*>(ctrl->mm_ptr) + 0x1c);
+    }
 
     void reserveQueues();
 
@@ -164,8 +172,10 @@ Controller::Controller(uint64_t ctrl_id, uint32_t ns_id, uint32_t)
  * @param cudaDevice 分配 I/O 队列的 CUDA 设备编号。
  * @param queueDepth 每条 I/O 队列的请求深度上限。
  * @param numQueues 请求使用的 I/O 队列对数量上限。
+ * @param swarmioFaultExit 允许块级测试在 SwarmIO 确认故障排空后退出 GPU 等待。
  */
-inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDevice, uint64_t queueDepth, uint64_t numQueues)
+inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDevice,
+                              uint64_t queueDepth, uint64_t numQueues, bool swarmioFaultExit)
     : ctrl(nullptr)
     , aq_ref(nullptr)
     , deviceId(cudaDevice)
@@ -202,12 +212,18 @@ inline Controller::Controller(const char* path, uint32_t ns_id, uint32_t cudaDev
     reserveQueues(MAX_QUEUES,MAX_QUEUES);
     n_qps = std::min(n_sqs, n_cqs);
     n_qps = std::min(n_qps, (uint16_t)numQueues);
+    void* gpuStatus = nullptr;
+    if (swarmioFaultExit)
+        cuda_err_chk(cudaHostGetDevicePointer(&gpuStatus,
+                     const_cast<uint32_t*>(controller_status()), 0));
     printf("SQs: %d\tCQs: %d\tn_qps: %d\n", n_sqs, n_cqs, n_qps);
     h_qps = (QueuePair**) malloc(sizeof(QueuePair)*n_qps);
     cuda_err_chk(cudaMalloc((void**)&d_qps, sizeof(QueuePair)*n_qps));
     for (size_t i = 0; i < n_qps; i++) {
         //printf("started creating qp\n");
         h_qps[i] = new QueuePair(ctrl, cudaDevice, ns, info, aq_ref, i+1, queueDepth);
+        h_qps[i]->sq.controller_status = static_cast<const volatile uint32_t*>(gpuStatus);
+        h_qps[i]->cq.controller_status = h_qps[i]->sq.controller_status;
         //printf("finished creating qp\n");
         cuda_err_chk(cudaMemcpy(d_qps+i, h_qps[i], sizeof(QueuePair), cudaMemcpyHostToDevice));
     }
