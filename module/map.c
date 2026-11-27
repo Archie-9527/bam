@@ -369,6 +369,8 @@ int map_gpu_memory(struct map* map, struct list* list)
 #endif
     if (err != 0)
     {
+        // A failed get_pages did not acquire a page table for the caller.
+        gd->pages = NULL;
         printk(KERN_ERR "nvidia_p2p_get_pages() failed: %d\n", err);
         return err;
     }
@@ -379,14 +381,16 @@ int map_gpu_memory(struct map* map, struct list* list)
     j = 0;
     while (element != NULL)
     {
+        nvidia_p2p_dma_mapping_t* mapping = NULL;
         ctrl = container_of(element, struct ctrl, list);
 
-        err = nvidia_p2p_dma_map_pages(ctrl->pdev, gd->pages, gd->mappings + (j++));
+        err = nvidia_p2p_dma_map_pages(ctrl->pdev, gd->pages, &mapping);
         if (err != 0)
         {
             //printk(KERN_ERR "nvidia_p2p_dma_map_pages() failed for nvme%u: %d\n", j-1, err);
             return err;
         }
+        gd->mappings[j++] = mapping;
         //for (i = 0; i < map->n_addrs; ++i)
         //{
 
